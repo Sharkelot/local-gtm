@@ -1,0 +1,33 @@
+FROM node:24.18.0-bookworm-slim
+
+ENV PNPM_HOME=/pnpm
+ENV COREPACK_HOME=/opt/corepack
+ENV PATH=$PNPM_HOME:$PATH
+WORKDIR /workspace
+RUN mkdir -p "$COREPACK_HOME" \
+  && corepack enable \
+  && corepack prepare pnpm@10.15.0 --activate \
+  && chmod -R a+rX "$COREPACK_HOME" \
+  && apt-get update \
+  && apt-get install --yes --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/db/package.json packages/db/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/domain/package.json packages/domain/package.json
+COPY packages/fixtures/package.json packages/fixtures/package.json
+RUN pnpm install --frozen-lockfile
+
+COPY packages/db packages/db
+COPY packages/contracts packages/contracts
+COPY packages/domain packages/domain
+COPY packages/fixtures packages/fixtures
+# The repository may contain developer-local workspace links. Rebuild them in
+# the image so the migration executable never depends on the build host.
+RUN rm -rf packages/db/node_modules packages/contracts/node_modules packages/domain/node_modules packages/fixtures/node_modules \
+  && pnpm install --offline --frozen-lockfile \
+  && DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build pnpm --filter @local-gtm/db db:generate
+
+USER node
+CMD ["pnpm", "--filter", "@local-gtm/db", "db:migrate"]

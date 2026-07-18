@@ -1,0 +1,187 @@
+name: legal-crm-identity
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-json-logging: &json-logging
+  logging:
+    driver: local
+    options: { max-size: 10m, max-file: '5' }
+
+services:
+  keycloak:
+    image: ${KEYCLOAK_IMAGE:?set KEYCLOAK_IMAGE to a release-pinned digest}
+    <<: [*restart, *json-logging]
+    command:
+      - start
+      - --proxy-headers=xforwarded
+      - --hostname=${KEYCLOAK_HOSTNAME:?set KEYCLOAK_HOSTNAME}
+      - --hostname-admin=${KEYCLOAK_ADMIN_HOSTNAME:?set KEYCLOAK_ADMIN_HOSTNAME}
+      - --http-enabled=false
+      - --https-port=8443
+      - --https-certificate-file=/run/identity-tls/keycloak.crt
+      - --https-certificate-key-file=/run/identity-tls/keycloak.key
+      - --health-enabled=true
+      - --metrics-enabled=true
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: ${KEYCLOAK_DATABASE_URL:?set the CT601 TLS-only Keycloak database URL}
+      KC_DB_SCHEMA: keycloak
+      KC_DB_USERNAME: ${POSTGRES_KEYCLOAK_USER:?set POSTGRES_KEYCLOAK_USER}
+      KC_DB_PASSWORD: ${POSTGRES_KEYCLOAK_PASSWORD:?set POSTGRES_KEYCLOAK_PASSWORD}
+    ports:
+      # Caddy on CT600 reaches this only through the private/VPN network.
+      - '${IDENTITY_PRIVATE_BIND_ADDRESS:?set CT603 private/VPN IP}:8443:8443'
+    volumes:
+      - ./identity/postgres-ca:/run/postgresql-ca:ro
+      - ./identity/tls:/run/identity-tls:ro
+    networks: [identity]
+    healthcheck:
+      # The minimal image has no TLS client. The listener becomes available only
+      # after Keycloak initialization; external readiness also checks OIDC over TLS.
+      test: [CMD-SHELL, "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8443'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 75s
+    deploy:
+      resources:
+        limits: { memory: 850M, cpus: '1.00' }
+        reservations: { memory: 384M }
+    security_opt: [no-new-privileges:true]
+
+  otel-collector:
+    image: ${OTEL_COLLECTOR_IMAGE:?set OTEL_COLLECTOR_IMAGE to a release-pinned digest}
+    <<: [*restart, *json-logging]
+    command: [--config=/etc/otelcol-contrib/config.yaml]
+    ports:
+      # OTLP/HTTP is accepted only from CT600 on the private network.
+      - '${IDENTITY_PRIVATE_BIND_ADDRESS:?set CT603 private/VPN IP}:4318:4318'
+    volumes:
+      - ./identity/otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
+      - ./identity/tls:/run/identity-tls:ro
+    networks: [identity]
+    healthcheck:
+      test: [CMD, /otelcol-contrib, --version]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits: { memory: 180M, cpus: '0.35' }
+        reservations: { memory: 64M }
+    security_opt: [no-new-privileges:true]
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:?set PROMETHEUS_IMAGE to a release-pinned digest}
+    <<: [*restart, *json-logging]
+    command:
+      [
+        --config.file=/etc/prometheus/prometheus.yml,
+        --storage.tsdb.path=/prometheus,
+        --storage.tsdb.retention.time=14d,
+        --web.enable-lifecycle,
+      ]
+    volumes:
+      - ./identity/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [identity]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:9090/-/ready]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: 400M, cpus: '0.50' }
+        reservations: { memory: 128M }
+    security_opt: [no-new-privileges:true]
+
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE:?set ALERTMANAGER_IMAGE to a release-pinned digest}
+    <<: [*restart, *json-logging]
+    command: [--config.file=/etc/alertmanager/alertmanager.yml, --storage.path=/alertmanager]
+    volumes:
+      - ./identity/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks: [identity]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:9093/-/ready]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: 120M, cpus: '0.20' }
+        reservations: { memory: 32M }
+    security_opt: [no-new-privileges:true]
+
+  loki:
+    image: ${LOKI_IMAGE:?set LOKI_IMAGE to a release-pinned digest}
+    <<: [*restart, *json-logging]
+    command: [-config.file=/etc/loki/config.yml]
+    volumes:
+      - ./identity/loki.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    networks: [identity]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:3100/ready]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: 400M, cpus: '0.45' }
+        reservations: { memory: 128M }
+    security_opt: [no-new-privileges:true]
+
+  grafana:
+    image: ${GRAFANA_IMAGE:?set GRAFANA_IMAGE to a release-pinned digest}
+    <<: [*restart, *json-logging]
+    environment:
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:?set the private HTTPS Grafana URL}
+      GF_SERVER_PROTOCOL: https
+      GF_SERVER_HTTP_PORT: '3000'
+      GF_SERVER_CERT_FILE: /run/identity-tls/grafana.crt
+      GF_SERVER_CERT_KEY: /run/identity-tls/grafana.key
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+      GF_SECURITY_COOKIE_SECURE: 'true'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_AUTH_DISABLE_LOGIN_FORM: 'false'
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?set GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+    ports:
+      - '${IDENTITY_PRIVATE_BIND_ADDRESS:?set CT603 private/VPN IP}:3000:3000'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./identity/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./identity/tls:/run/identity-tls:ro
+    networks: [identity]
+    depends_on:
+      prometheus: { condition: service_healthy }
+      loki: { condition: service_healthy }
+    healthcheck:
+      # The container's leaf certificate is verified by Caddy; this loopback liveness
+      # probe intentionally does not require a hostname-valid certificate.
+      test:
+        [CMD, wget, --no-check-certificate, -q, -O, /dev/null, https://127.0.0.1:3000/api/health]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { memory: 250M, cpus: '0.35' }
+        reservations: { memory: 96M }
+    security_opt: [no-new-privileges:true]
+
+networks:
+  # Keycloak requires private egress to CT601 PostgreSQL; services without a ports
+  # declaration remain unreachable from the host despite this egress-capable network.
+  identity: { name: legal-crm-identity }
+
+volumes:
+  prometheus_data: {}
+  alertmanager_data: {}
+  loki_data: {}
+  grafana_data: {}

@@ -1,0 +1,8 @@
+node_modules
+.next
+dist
+coverage
+.playwright-cli
+pnpm-lock.yaml
+apps/web/next-env.d.ts
+deploy/**/data

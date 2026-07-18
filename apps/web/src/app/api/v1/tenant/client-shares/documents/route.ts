@@ -1,0 +1,43 @@
+import {
+  grantClientDocumentShare,
+  grantClientDocumentShareInputSchema,
+  prisma,
+  revokeClientDocumentShare,
+  revokeClientDocumentShareInputSchema,
+} from '@local-gtm/db';
+import { apiError } from '@/lib/api-response';
+import { getActiveRequestContext } from '@/lib/request-context';
+
+export async function POST(request: Request) {
+  try {
+    const context = await getActiveRequestContext({ redirectOnMissing: false });
+    if (!context) return Response.json({ message: 'Unauthorized' }, { status: 401 });
+    const idempotencyKey = request.headers.get('idempotency-key');
+    if (!idempotencyKey)
+      return Response.json({ message: 'Idempotency-Key is required.' }, { status: 400 });
+    const input = grantClientDocumentShareInputSchema.parse({
+      ...(await request.json()),
+      idempotencyKey,
+    });
+    return Response.json(await grantClientDocumentShare(prisma, context, input), { status: 201 });
+  } catch (error) {
+    return apiError(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const context = await getActiveRequestContext({ redirectOnMissing: false });
+    if (!context) return Response.json({ message: 'Unauthorized' }, { status: 401 });
+    const idempotencyKey = request.headers.get('idempotency-key');
+    if (!idempotencyKey)
+      return Response.json({ message: 'Idempotency-Key is required.' }, { status: 400 });
+    const input = revokeClientDocumentShareInputSchema.parse({
+      ...(await request.json()),
+      idempotencyKey,
+    });
+    return Response.json(await revokeClientDocumentShare(prisma, context, input));
+  } catch (error) {
+    return apiError(error);
+  }
+}

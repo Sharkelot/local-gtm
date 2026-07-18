@@ -1,0 +1,339 @@
+name: legal-crm
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-json-logging: &json-logging
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: '5'
+
+services:
+  caddy:
+    build:
+      context: ./caddy
+    image: local/legal-crm-caddy:2.10.2
+    <<: [*restart, *json-logging]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      HOOKS_DOMAIN: ${HOOKS_DOMAIN}
+      KEYCLOAK_DOMAIN: ${KEYCLOAK_DOMAIN}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge: {}
+      app:
+        aliases:
+          - ${KEYCLOAK_DOMAIN}
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'caddy', 'version']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt: [no-new-privileges:true]
+
+  web:
+    image: ${WEB_IMAGE}
+    <<: [*restart, *json-logging]
+    environment:
+      NODE_ENV: production
+      NEXTAUTH_URL: https://${APP_DOMAIN}
+      DATABASE_URL: postgresql://${POSTGRES_RUNTIME_USER}:${POSTGRES_RUNTIME_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      INTERNAL_DATABASE_URL: postgresql://${POSTGRES_PLATFORM_USER}:${POSTGRES_PLATFORM_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      KEYCLOAK_ISSUER: https://${KEYCLOAK_DOMAIN}/realms/legal-crm
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      AUTH_SECRET: ${NEXTAUTH_SECRET}
+      INFERENCE_WORKER_TOKEN: ${INFERENCE_WORKER_TOKEN}
+      INFERENCE_WORKER_ACTOR_ID: ${INFERENCE_WORKER_ACTOR_ID}
+      WEBHOOK_TRUSTED_MAPPINGS: ${WEBHOOK_TRUSTED_MAPPINGS}
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      OTEL_SERVICE_NAME: legal-crm-web
+    networks: [app, data, observability]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrator: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(''http://127.0.0.1:3000/api/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+
+  platform-worker:
+    image: ${PLATFORM_WORKER_IMAGE}
+    <<: [*restart, *json-logging]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_PLATFORM_USER}:${POSTGRES_PLATFORM_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: 'false'
+      MINIO_ACCESS_KEY: ${MINIO_SCANNER_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SCANNER_SECRET_KEY}
+      MINIO_DOCUMENT_BUCKET: ${MINIO_DOCUMENT_BUCKET}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      OTEL_SERVICE_NAME: legal-crm-platform-worker
+    networks: [app, data, observability]
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      minio-bootstrap: { condition: service_completed_successfully }
+      clamav: { condition: service_healthy }
+      migrator: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+
+  postgres:
+    image: postgres:17.5-bookworm
+    <<: [*restart, *json-logging]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_BOOTSTRAP_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_BOOTSTRAP_PASSWORD}
+      POSTGRES_MIGRATION_USER: ${POSTGRES_MIGRATION_USER}
+      POSTGRES_MIGRATION_PASSWORD: ${POSTGRES_MIGRATION_PASSWORD}
+      POSTGRES_RUNTIME_USER: ${POSTGRES_RUNTIME_USER}
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD}
+      POSTGRES_PLATFORM_USER: ${POSTGRES_PLATFORM_USER}
+      POSTGRES_PLATFORM_PASSWORD: ${POSTGRES_PLATFORM_PASSWORD}
+      POSTGRES_REPORTING_USER: ${POSTGRES_REPORTING_USER}
+      POSTGRES_REPORTING_PASSWORD: ${POSTGRES_REPORTING_PASSWORD}
+      POSTGRES_KEYCLOAK_USER: ${POSTGRES_KEYCLOAK_USER}
+      POSTGRES_KEYCLOAK_PASSWORD: ${POSTGRES_KEYCLOAK_PASSWORD}
+    # The data plane has no host-published port. Add a managed certificate mount before
+    # enabling PostgreSQL TLS; ssl=on without a certificate prevents a clean bootstrap.
+    command: ['postgres', '-c', 'password_encryption=scram-sha-256']
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/00-create-roles.sh:/docker-entrypoint-initdb.d/00-create-roles.sh:ro
+    networks: [data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+
+  migrator:
+    build:
+      context: ..
+      dockerfile: packages/db/Dockerfile.migrator
+    image: ${MIGRATOR_IMAGE}
+    restart: 'no'
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+    networks: [data]
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp, /workspace/packages/db/node_modules/.prisma]
+    security_opt: [no-new-privileges:true]
+
+  redis:
+    image: redis:7.4.2-alpine
+    <<: [*restart, *json-logging]
+    command: ['redis-server', '--appendonly', 'yes', '--requirepass', '${REDIS_PASSWORD}']
+    volumes:
+      - redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2.0
+    <<: [*restart, *json-logging]
+    command:
+      [
+        'start',
+        '--optimized',
+        '--proxy-headers=xforwarded',
+        '--hostname=https://${KEYCLOAK_DOMAIN}',
+        '--http-enabled=true',
+        '--health-enabled=true',
+      ]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      KC_DB_SCHEMA: keycloak
+      KC_DB_USERNAME: ${POSTGRES_KEYCLOAK_USER}
+      KC_DB_PASSWORD: ${POSTGRES_KEYCLOAK_PASSWORD}
+    networks: [app, data]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "bash -c \"exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nhost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '200' <&3\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    security_opt: [no-new-privileges:true]
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    <<: [*restart, *json-logging]
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes: [minio_data:/data]
+    networks: [app, data]
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:9000/minio/health/live']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+
+  minio-bootstrap:
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
+    restart: 'no'
+    entrypoint: ['/bin/sh']
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_DOCUMENT_BUCKET: ${MINIO_DOCUMENT_BUCKET}
+      MINIO_DOCUMENT_RETENTION_DAYS: ${MINIO_DOCUMENT_RETENTION_DAYS}
+      MINIO_SCANNER_ACCESS_KEY: ${MINIO_SCANNER_ACCESS_KEY}
+      MINIO_SCANNER_SECRET_KEY: ${MINIO_SCANNER_SECRET_KEY}
+    command: ['/bootstrap/bootstrap-documents.sh']
+    volumes:
+      - ./minio:/bootstrap:ro
+    networks: [data]
+    depends_on:
+      minio: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+
+  clamav:
+    image: clamav/clamav:1.4.3_base
+    <<: [*restart, *json-logging]
+    networks: [app]
+    healthcheck:
+      test: ['CMD-SHELL', 'clamdscan --ping=1']
+      interval: 60s
+      timeout: 10s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+
+  openbao:
+    image: openbao/openbao:2.2.1
+    <<: [*restart, *json-logging]
+    command: server -config=/openbao/config/openbao.hcl
+    cap_add: [IPC_LOCK]
+    volumes:
+      - openbao_data:/openbao/file
+      - ./openbao/openbao.hcl:/openbao/config/openbao.hcl:ro
+    networks: [app, data]
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'BAO_ADDR=http://127.0.0.1:8200 bao status >/dev/null 2>&1 || test $$? -eq 2']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.129.0
+    <<: [*restart, *json-logging]
+    command: ['--config=/etc/otelcol-contrib/config.yaml']
+    volumes: [./observability/otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro]
+    networks: [observability]
+    security_opt: [no-new-privileges:true]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    <<: [*restart, *json-logging]
+    command:
+      [
+        '--config.file=/etc/prometheus/prometheus.yml',
+        '--storage.tsdb.path=/prometheus',
+        '--web.enable-lifecycle',
+      ]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [observability]
+    security_opt: [no-new-privileges:true]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    <<: [*restart, *json-logging]
+    command: ['--config.file=/etc/alertmanager/alertmanager.yml', '--storage.path=/alertmanager']
+    volumes: [./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro]
+    networks: [observability]
+    security_opt: [no-new-privileges:true]
+
+  loki:
+    image: grafana/loki:3.5.1
+    <<: [*restart, *json-logging]
+    command: ['-config.file=/etc/loki/config.yml']
+    volumes: [./observability/loki.yml:/etc/loki/config.yml:ro]
+    networks: [observability]
+    security_opt: [no-new-privileges:true]
+
+  grafana:
+    image: grafana/grafana:12.0.2
+    <<: [*restart, *json-logging]
+    environment:
+      GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN}
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    networks: [app, observability]
+    security_opt: [no-new-privileges:true]
+
+networks:
+  edge: { name: legal-crm-edge }
+  app: { internal: true, name: legal-crm-app }
+  data: { internal: true, name: legal-crm-data }
+  observability: { internal: true, name: legal-crm-observability }
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  postgres_data: {}
+  redis_data: {}
+  minio_data: {}
+  openbao_data: {}
+  prometheus_data: {}
+  grafana_data: {}

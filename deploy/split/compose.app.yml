@@ -1,0 +1,165 @@
+name: legal-crm-app
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-json-logging: &json-logging
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: '5'
+
+services:
+  caddy:
+    image: ${CADDY_IMAGE:?set CADDY_IMAGE to the released Caddy image with the Cloudflare DNS module}
+    <<: [*restart, *json-logging]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+      HOOKS_DOMAIN: ${HOOKS_DOMAIN:?set HOOKS_DOMAIN}
+      # These names keep the shared Caddy configuration valid. Keycloak and Grafana
+      # are remote in this topology and are not services in this Compose project.
+      KEYCLOAK_DOMAIN: ${KEYCLOAK_DOMAIN:?set KEYCLOAK_DOMAIN}
+      KEYCLOAK_ADMIN_DOMAIN: ${KEYCLOAK_ADMIN_DOMAIN:?set KEYCLOAK_ADMIN_DOMAIN}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:?set GRAFANA_DOMAIN}
+      KEYCLOAK_UPSTREAM: ${KEYCLOAK_UPSTREAM:?set the private HTTPS Keycloak upstream URL}
+      GRAFANA_UPSTREAM: ${GRAFANA_UPSTREAM:?set the private HTTPS Grafana upstream URL}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${PRIVATE_CA_BUNDLE_PATH:?set the absolute host path to the inter-CT CA bundle}:/etc/ssl/private-ca/ca-bundle.pem:ro
+    networks:
+      app:
+        aliases:
+          # Server-side OIDC discovery must resolve the public issuer hostname
+          # through the private HTTPS proxy without relying on public DNS.
+          - ${KEYCLOAK_DOMAIN:?set KEYCLOAK_DOMAIN}
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'caddy', 'version']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt: [no-new-privileges:true]
+
+  web:
+    image: ${WEB_IMAGE:?set WEB_IMAGE to an immutable released image reference}
+    <<: [*restart, *json-logging]
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: '3000'
+      NEXTAUTH_URL: https://${APP_DOMAIN:?set APP_DOMAIN}
+      DATABASE_URL: ${DATABASE_URL:?set the remote runtime PostgreSQL URL}
+      INTERNAL_DATABASE_URL: ${INTERNAL_DATABASE_URL:?set the remote platform PostgreSQL URL}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:?set the remote Keycloak issuer URL}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:?set KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?set KEYCLOAK_CLIENT_SECRET}
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET}
+      INFERENCE_WORKER_TOKEN: ${INFERENCE_WORKER_TOKEN:?set INFERENCE_WORKER_TOKEN}
+      INFERENCE_WORKER_ACTOR_ID: ${INFERENCE_WORKER_ACTOR_ID:?set INFERENCE_WORKER_ACTOR_ID}
+      WEBHOOK_TRUSTED_MAPPINGS: ${WEBHOOK_TRUSTED_MAPPINGS:?set WEBHOOK_TRUSTED_MAPPINGS}
+      OPENBAO_ADDR: ${OPENBAO_ADDR:?set the remote OpenBao URL}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN:?set the scoped OpenBao workload token}
+      OTEL_SERVICE_NAME: legal-crm-web
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:?set the remote OTLP endpoint}
+      NODE_EXTRA_CA_CERTS: /etc/ssl/private-ca/ca-bundle.pem
+    networks: [app]
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://127.0.0.1:3000/api/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - ${PRIVATE_CA_BUNDLE_PATH:?set the absolute host path to the inter-CT CA bundle}:/etc/ssl/private-ca/ca-bundle.pem:ro
+    security_opt: [no-new-privileges:true]
+
+  platform-worker:
+    image: ${PLATFORM_WORKER_IMAGE:?set PLATFORM_WORKER_IMAGE to an immutable released image reference}
+    <<: [*restart, *json-logging]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${PLATFORM_DATABASE_URL:?set the remote platform PostgreSQL URL}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:?set the remote MinIO hostname}
+      MINIO_PORT: ${MINIO_PORT:?set the remote MinIO port}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:?set MINIO_USE_SSL}
+      MINIO_ACCESS_KEY: ${MINIO_SCANNER_ACCESS_KEY:?set MINIO_SCANNER_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SCANNER_SECRET_KEY:?set MINIO_SCANNER_SECRET_KEY}
+      MINIO_DOCUMENT_BUCKET: ${MINIO_DOCUMENT_BUCKET:?set MINIO_DOCUMENT_BUCKET}
+      CLAMAV_HOST: ${CLAMAV_HOST:?set the remote ClamAV hostname}
+      CLAMAV_PORT: ${CLAMAV_PORT:?set the remote ClamAV port}
+      OTEL_SERVICE_NAME: legal-crm-platform-worker
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:?set the remote OTLP endpoint}
+      NODE_EXTRA_CA_CERTS: /etc/ssl/private-ca/ca-bundle.pem
+    networks: [app]
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://127.0.0.1:3001\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - ${PRIVATE_CA_BUNDLE_PATH:?set the absolute host path to the inter-CT CA bundle}:/etc/ssl/private-ca/ca-bundle.pem:ro
+    security_opt: [no-new-privileges:true]
+
+  redis:
+    image: ${REDIS_IMAGE:?set REDIS_IMAGE to an immutable Redis image reference}
+    <<: [*restart, *json-logging]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--requirepass',
+        '${REDIS_PASSWORD:?set REDIS_PASSWORD}',
+      ]
+    volumes:
+      - redis_data:/data
+    ports:
+      # Bind only CT 600's private address. Host firewall must allow TCP/6379 only
+      # from the Windows inference worker and explicitly approved private workers.
+      - '${REDIS_PRIVATE_BIND_ADDRESS:?set CT 600 private IP}:6379:6379'
+    networks: [app]
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+
+networks:
+  # Remote private dependencies require egress. Redis is published only on CT 600's private IP.
+  app: { name: legal-crm-app }
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  redis_data: {}

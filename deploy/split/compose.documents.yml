@@ -1,0 +1,111 @@
+name: legal-crm-documents
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-json-logging: &json-logging
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: '5'
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    <<: [*restart, *json-logging]
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_CERTS_DIR: /root/.minio/certs
+    # Bind only the documents CT's private/WireGuard address. Do not use 0.0.0.0,
+    # publish the console, or permit this port from any network except the app CT.
+    ports:
+      - '${DOCUMENTS_PRIVATE_BIND_IP}:9000:9000'
+    volumes:
+      - minio_data:/data
+      - ./minio/certs:/root/.minio/certs:ro
+    networks:
+      documents:
+        aliases: [minio.local-gtm.internal]
+    healthcheck:
+      # The loopback probe proves the server requires TLS; client CA/SAN verification happens
+      # from the application CT against its private DNS endpoint.
+      test:
+        ['CMD-SHELL', 'curl --fail --silent --insecure https://127.0.0.1:9000/minio/health/live']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+
+  minio-bootstrap:
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
+    restart: 'no'
+    entrypoint: ['/bin/sh']
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_DOCUMENT_BUCKET: ${MINIO_DOCUMENT_BUCKET}
+      MINIO_DOCUMENT_RETENTION_DAYS: ${MINIO_DOCUMENT_RETENTION_DAYS}
+      MINIO_UPLOADER_ACCESS_KEY: ${MINIO_UPLOADER_ACCESS_KEY}
+      MINIO_UPLOADER_SECRET_KEY: ${MINIO_UPLOADER_SECRET_KEY}
+      MINIO_SCANNER_ACCESS_KEY: ${MINIO_SCANNER_ACCESS_KEY}
+      MINIO_SCANNER_SECRET_KEY: ${MINIO_SCANNER_SECRET_KEY}
+      MC_CONFIG_DIR: /tmp/mc
+    command: ['/bootstrap/bootstrap-documents.sh']
+    volumes:
+      - ./minio/bootstrap-documents.sh:/bootstrap/bootstrap-documents.sh:ro
+      - ./minio/certs/CAs:/tmp/mc/certs/CAs:ro
+    networks: [documents]
+    depends_on:
+      minio: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+
+  clamav:
+    image: clamav/clamav:1.4.3_base
+    <<: [*restart, *json-logging]
+    # The platform worker runs on app CT 600. Bind clamd only to CT 602's private
+    # address and enforce a host-firewall allow rule for source 10.0.0.70 only.
+    ports:
+      - '${DOCUMENTS_PRIVATE_BIND_IP}:3310:3310'
+    networks: [documents]
+    healthcheck:
+      test: ['CMD-SHELL', 'clamdscan --ping=1']
+      interval: 60s
+      timeout: 10s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+
+  openbao:
+    image: openbao/openbao:2.2.1
+    <<: [*restart, *json-logging]
+    command: server -config=/openbao/config/openbao.hcl
+    ports:
+      - '${DOCUMENTS_PRIVATE_BIND_IP}:8200:8200'
+    volumes:
+      - openbao_data:/openbao/file
+      - ./openbao/openbao.hcl:/openbao/config/openbao.hcl:ro
+      - ./openbao/tls:/openbao/tls:ro
+    networks: [documents]
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'BAO_ADDR=https://127.0.0.1:8200 BAO_SKIP_VERIFY=true bao status >/dev/null 2>&1 || test $$? -eq 2',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+
+networks:
+  # Inter-CT clients arrive through explicitly published private-IP ports. Docker
+  # does not activate those bindings on an internal-only bridge.
+  documents: { name: legal-crm-documents }
+
+volumes:
+  minio_data: {}
+  openbao_data: {}

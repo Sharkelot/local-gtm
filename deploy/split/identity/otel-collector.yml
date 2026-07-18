@@ -1,0 +1,21 @@
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:13133
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        tls:
+          cert_file: /run/identity-tls/otel.crt
+          key_file: /run/identity-tls/otel.key
+exporters:
+  debug: {}
+service:
+  extensions: [health_check]
+  pipelines:
+    traces: { receivers: [otlp], exporters: [debug] }
+    metrics: { receivers: [otlp], exporters: [debug] }
+    logs: { receivers: [otlp], exporters: [debug] }

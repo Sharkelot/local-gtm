@@ -1,0 +1,23 @@
+{
+  "name": "@local-gtm/platform-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@local-gtm/db": "workspace:*",
+    "bullmq": "5.71.1",
+    "minio": "8.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.9",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
+  }
+}

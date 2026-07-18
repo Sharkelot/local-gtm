@@ -1,0 +1,88 @@
+name: legal-crm-data
+
+x-json-logging: &json-logging
+  logging:
+    driver: local
+    options: { max-size: 10m, max-file: '5' }
+
+services:
+  postgres:
+    image: postgres:17.5-bookworm
+    restart: unless-stopped
+    <<: *json-logging
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_BOOTSTRAP_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_BOOTSTRAP_PASSWORD}
+      POSTGRES_MIGRATION_USER: ${POSTGRES_MIGRATION_USER}
+      POSTGRES_MIGRATION_PASSWORD: ${POSTGRES_MIGRATION_PASSWORD}
+      POSTGRES_RUNTIME_USER: ${POSTGRES_RUNTIME_USER}
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD}
+      POSTGRES_PLATFORM_USER: ${POSTGRES_PLATFORM_USER}
+      POSTGRES_PLATFORM_PASSWORD: ${POSTGRES_PLATFORM_PASSWORD}
+      POSTGRES_REPORTING_USER: ${POSTGRES_REPORTING_USER}
+      POSTGRES_REPORTING_PASSWORD: ${POSTGRES_REPORTING_PASSWORD}
+      POSTGRES_KEYCLOAK_USER: ${POSTGRES_KEYCLOAK_USER}
+      POSTGRES_KEYCLOAK_PASSWORD: ${POSTGRES_KEYCLOAK_PASSWORD}
+    # This is a private host address (usually the CT's private/VPN address), never 0.0.0.0.
+    ports: ['${POSTGRES_PRIVATE_BIND_ADDRESS}:5432:5432']
+    command: ['postgres', '-c', 'config_file=/etc/postgresql/postgresql.conf']
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/00-create-roles.sh:/docker-entrypoint-initdb.d/00-create-roles.sh:ro
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      # Provision managed files out of band. Do not put certificate/key material in Git.
+      - ./postgres/tls:/etc/postgresql/tls:ro
+    networks: [data]
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'PGPASSWORD="$$POSTGRES_PASSWORD" psql "host=127.0.0.1 port=5432 dbname=$$POSTGRES_DB user=$$POSTGRES_USER sslmode=require connect_timeout=5" -Atqc "SELECT 1" >/dev/null',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    security_opt: [no-new-privileges:true]
+
+  migrator:
+    # CI/CD must provide a release-pinned digest, e.g. registry/legal-crm-migrator@sha256:... .
+    image: ${MIGRATOR_IMAGE:?set an immutable migrator image digest}
+    profiles: [migration]
+    restart: 'no'
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public&sslmode=require
+    networks: [data]
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp, /workspace/packages/db/node_modules/.prisma]
+    security_opt: [no-new-privileges:true]
+
+  seeder:
+    image: ${MIGRATOR_IMAGE:?set an immutable migrator image digest}
+    profiles: [seed]
+    restart: 'no'
+    command: ['pnpm', '--filter', '@local-gtm/db', 'db:seed']
+    environment:
+      NODE_ENV: production
+      # Demo fixture administration is the explicit platform-RLS exception; the
+      # migration owner and runtime role remain unable to bypass tenant RLS.
+      DATABASE_URL: postgresql://${POSTGRES_PLATFORM_USER}:${POSTGRES_PLATFORM_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public&sslmode=require
+    networks: [data]
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp, /workspace/packages/db/node_modules/.prisma]
+    security_opt: [no-new-privileges:true]
+
+networks:
+  # Inter-CT clients arrive through explicitly published private-IP ports. Docker
+  # does not activate those bindings on an internal-only bridge.
+  data: { name: legal-crm-data }
+
+volumes:
+  postgres_data: {}

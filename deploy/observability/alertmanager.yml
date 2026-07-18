@@ -1,0 +1,5 @@
+route:
+  receiver: security-and-operations
+receivers:
+  - name: security-and-operations
+    # Configure an authenticated incident-management webhook outside source control.

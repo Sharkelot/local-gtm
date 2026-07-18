@@ -1,0 +1,773 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum MembershipRole {
+  PLATFORM_ADMIN
+  TENANT_ADMIN
+  ATTORNEY
+  SALES
+  BILLING
+  STAFF
+  AUDITOR
+  CLIENT
+}
+
+enum DealStage {
+  PROSPECTING
+  DISCOVERY
+  EVALUATION
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum AiJobStatus {
+  QUEUED
+  WAITING_FOR_WORKER
+  WAITING_FOR_INFERENCE
+  PROCESSING
+  COMPLETED
+  FAILED_VALIDATION
+  FAILED_TERMINAL
+}
+
+enum AiSuggestionKind {
+  INTEGRATION_REQUIREMENT
+  SECURITY_CONCERN
+  FOLLOW_UP_DATE
+  DECISION_MAKER
+  GENERAL_FIELD_UPDATE
+}
+
+enum SuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  STALE
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum DuplicateStatus {
+  PENDING
+  CONFIRMED
+  DISMISSED
+  MERGED
+}
+
+enum DocumentScanStatus {
+  QUARANTINED
+  CLEAN
+  INFECTED
+  FAILED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  VOID
+}
+
+enum LedgerAccountType {
+  OPERATING
+  TRUST_BANK
+  CLIENT_TRUST_LIABILITY
+  REVENUE
+  RECEIVABLE
+}
+
+enum AccountingPeriodStatus {
+  OPEN
+  CLOSED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+model Tenant {
+  id                       String                @id @default(uuid()) @db.Uuid
+  name                     String
+  slug                     String                @unique
+  status                   TenantStatus          @default(ACTIVE)
+  financialFeaturesEnabled Boolean               @default(false)
+  jurisdictionCode         String?
+  approvedBy               String?
+  approvedAt               DateTime?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  memberships              Membership[]
+  organizations            Organization[]
+  contacts                 Contact[]
+  deals                    Deal[]
+  notes                    Note[]
+  aiJobs                   AiJob[]
+  auditEvents              AuditEvent[]
+  accountingPeriods        AccountingPeriod[]
+  periodLocks              PeriodLock[]
+  retentionPolicies        RetentionPolicy[]
+  evidenceRecords          EvidenceRecord[]
+  clientMatterShares       ClientMatterShare[]
+  clientDocumentShares     ClientDocumentShare[]
+}
+
+model Identity {
+  id          String       @id @default(uuid()) @db.Uuid
+  issuer      String
+  subject     String
+  email       String
+  displayName String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+
+  @@unique([issuer, subject])
+}
+
+model Membership {
+  id                   String                @id @default(uuid()) @db.Uuid
+  tenantId             String                @db.Uuid
+  identityId           String                @db.Uuid
+  role                 MembershipRole
+  active               Boolean               @default(true)
+  createdAt            DateTime              @default(now())
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  identity             Identity              @relation(fields: [identityId], references: [id], onDelete: Restrict)
+  clientMatterShares   ClientMatterShare[]
+  clientDocumentShares ClientDocumentShare[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, identityId])
+  @@index([identityId, active])
+}
+
+model Organization {
+  id                      String                @id @default(uuid()) @db.Uuid
+  tenantId                String                @db.Uuid
+  name                    String
+  normalizedName          String
+  industry                String?
+  website                 String?
+  securityConcern         Boolean               @default(false)
+  securityConcerns        String[]
+  integrationRequirements String[]
+  archivedAt              DateTime?
+  version                 Int                   @default(1)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  tenant                  Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  contacts                Contact[]
+  deals                   Deal[]
+  matters                 Matter[]
+  duplicateCandidates     DuplicateCandidate[]
+  linkedCommunications    LinkedCommunication[]
+
+  @@unique([tenantId, normalizedName])
+  @@unique([id, tenantId])
+  @@index([tenantId, securityConcern])
+}
+
+model Contact {
+  id              String               @id @default(uuid()) @db.Uuid
+  tenantId        String               @db.Uuid
+  organizationId  String?              @db.Uuid
+  firstName       String
+  lastName        String
+  email           String?
+  normalizedEmail String?
+  phone           String?
+  normalizedPhone String?
+  title           String?
+  isDecisionMaker Boolean              @default(false)
+  archivedAt      DateTime?
+  version         Int                  @default(1)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  organization    Organization?        @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  duplicateLeft   DuplicateCandidate[] @relation("DuplicateLeft")
+  duplicateRight  DuplicateCandidate[] @relation("DuplicateRight")
+
+  @@index([tenantId, normalizedEmail])
+  @@index([tenantId, normalizedPhone])
+  @@index([tenantId, lastName, firstName])
+}
+
+model Deal {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  organizationId String       @db.Uuid
+  name           String
+  stage          DealStage    @default(PROSPECTING)
+  valueCents     Int?
+  followUpAt     DateTime?
+  archivedAt     DateTime?
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  notes          Note[]
+
+  @@index([tenantId, stage])
+}
+
+model Note {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  dealId    String   @db.Uuid
+  body      String
+  version   Int      @default(1)
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Restrict)
+  aiJobs    AiJob[]
+
+  @@index([tenantId, dealId, createdAt])
+}
+
+model AiJob {
+  id                String         @id @default(uuid()) @db.Uuid
+  tenantId          String         @db.Uuid
+  noteId            String         @db.Uuid
+  status            AiJobStatus    @default(QUEUED)
+  reasonCode        String?
+  modelId           String?
+  promptVersion     String         @default("discovery-v1")
+  schemaVersion     String         @default("1")
+  validationRetries Int            @default(0)
+  nextRetryAt       DateTime?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  note              Note           @relation(fields: [noteId], references: [id], onDelete: Restrict)
+  attempts          AiAttempt[]
+  suggestions       AiSuggestion[]
+
+  @@index([tenantId, status, createdAt])
+}
+
+model AiAttempt {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @db.Uuid
+  aiJobId            String   @db.Uuid
+  attemptNumber      Int
+  encryptedRawOutput String?
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime @default(now())
+  aiJob              AiJob    @relation(fields: [aiJobId], references: [id], onDelete: Restrict)
+
+  @@unique([aiJobId, attemptNumber])
+  @@index([tenantId, createdAt])
+}
+
+model AiSuggestion {
+  id               String           @id @default(uuid()) @db.Uuid
+  tenantId         String           @db.Uuid
+  aiJobId          String           @db.Uuid
+  kind             AiSuggestionKind
+  status           SuggestionStatus @default(PENDING)
+  evidenceText     String
+  confidence       Float
+  targetEntityType String
+  targetEntityId   String           @db.Uuid
+  targetField      String
+  proposedValue    Json
+  sourceVersion    Int
+  decidedBy        String?
+  decidedAt        DateTime?
+  createdAt        DateTime         @default(now())
+  aiJob            AiJob            @relation(fields: [aiJobId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, status, kind])
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @db.Uuid
+  aggregateType String
+  aggregateId   String       @db.Uuid
+  eventType     String
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  availableAt   DateTime     @default(now())
+  publishedAt   DateTime?
+  lastError     String?
+  createdAt     DateTime     @default(now())
+
+  @@index([status, availableAt])
+  @@index([tenantId, createdAt])
+}
+
+model AuditEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @db.Uuid
+  sequence      BigInt
+  actorType     String
+  actorId       String
+  action        String
+  entityType    String
+  entityId      String   @db.Uuid
+  entityVersion Int?
+  redactedDiff  Json
+  reason        String?
+  correlationId String   @db.Uuid
+  previousHash  String?
+  eventHash     String
+  createdAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, sequence])
+  @@index([tenantId, entityType, entityId, createdAt])
+  @@index([tenantId, correlationId])
+}
+
+model WorkerHeartbeat {
+  id         String   @id @default(uuid()) @db.Uuid
+  workerId   String   @unique
+  workerType String
+  modelIds   String[]
+  status     String
+  lastSeenAt DateTime
+  metadata   Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model ImportRun {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @db.Uuid
+  filename       String
+  idempotencyKey String
+  requestHash    String
+  status         String
+  rowsTotal      Int       @default(0)
+  rowsImported   Int       @default(0)
+  duplicateCount Int       @default(0)
+  errors         Json      @default("[]")
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, createdAt])
+}
+
+model DuplicateCandidate {
+  id             String          @id @default(uuid()) @db.Uuid
+  tenantId       String          @db.Uuid
+  organizationId String?         @db.Uuid
+  leftContactId  String          @db.Uuid
+  rightContactId String          @db.Uuid
+  score          Float
+  reasons        String[]
+  status         DuplicateStatus @default(PENDING)
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  organization   Organization?   @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  leftContact    Contact         @relation("DuplicateLeft", fields: [leftContactId], references: [id], onDelete: Restrict)
+  rightContact   Contact         @relation("DuplicateRight", fields: [rightContactId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, leftContactId, rightContactId])
+  @@index([tenantId, status])
+}
+
+model Matter {
+  id                   String                @id @default(uuid()) @db.Uuid
+  tenantId             String                @db.Uuid
+  organizationId       String?               @db.Uuid
+  matterNumber         String
+  name                 String
+  status               String
+  practiceArea         String?
+  openedAt             DateTime?
+  closedAt             DateTime?
+  archivedAt           DateTime?
+  legalHold            Boolean               @default(false)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  documents            Document[]
+  timeEntries          TimeEntry[]
+  invoices             Invoice[]
+  linkedCommunications LinkedCommunication[]
+  clientShares         ClientMatterShare[]
+
+  @@unique([tenantId, matterNumber])
+  @@unique([id, tenantId])
+  @@index([tenantId, status])
+}
+
+model Document {
+  id           String                @id @default(uuid()) @db.Uuid
+  tenantId     String                @db.Uuid
+  matterId     String                @db.Uuid
+  name         String
+  scanStatus   DocumentScanStatus    @default(QUARANTINED)
+  legalHold    Boolean               @default(false)
+  retentionAt  DateTime?
+  createdBy    String
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  matter       Matter                @relation(fields: [matterId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  versions     DocumentVersion[]
+  clientShares ClientDocumentShare[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, matterId])
+}
+
+model ClientMatterShare {
+  id           String     @id @default(uuid()) @db.Uuid
+  tenantId     String     @db.Uuid
+  membershipId String     @db.Uuid
+  matterId     String     @db.Uuid
+  sharedBy     String
+  createdAt    DateTime   @default(now())
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  membership   Membership @relation(fields: [membershipId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  matter       Matter     @relation(fields: [matterId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([tenantId, membershipId, matterId])
+  @@index([tenantId, membershipId, createdAt])
+}
+
+model ClientDocumentShare {
+  id           String     @id @default(uuid()) @db.Uuid
+  tenantId     String     @db.Uuid
+  membershipId String     @db.Uuid
+  documentId   String     @db.Uuid
+  sharedBy     String
+  createdAt    DateTime   @default(now())
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  membership   Membership @relation(fields: [membershipId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  document     Document   @relation(fields: [documentId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([tenantId, membershipId, documentId])
+  @@index([tenantId, membershipId, createdAt])
+}
+
+model DocumentVersion {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @db.Uuid
+  documentId       String   @db.Uuid
+  version          Int
+  objectKey        String
+  objectVersion    String
+  encryptedDataKey String
+  contentType      String
+  sizeBytes        BigInt
+  sha256           String
+  createdBy        String
+  createdAt        DateTime @default(now())
+  document         Document @relation(fields: [documentId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([documentId, version])
+  @@unique([tenantId, objectKey, objectVersion])
+}
+
+model IntegrationConnection {
+  id                   String                @id @default(uuid()) @db.Uuid
+  tenantId             String                @db.Uuid
+  identityId           String?               @db.Uuid
+  provider             String
+  encryptedToken       String
+  scopes               String[]
+  syncCursor           String?
+  enabled              Boolean               @default(true)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  linkedCommunications LinkedCommunication[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, provider, enabled])
+}
+
+model LinkedCommunication {
+  id             String                @id @default(uuid()) @db.Uuid
+  tenantId       String                @db.Uuid
+  connectionId   String                @db.Uuid
+  provider       String
+  itemType       String
+  providerItemId String
+  matterId       String?               @db.Uuid
+  organizationId String?               @db.Uuid
+  subject        String?
+  occurredAt     DateTime?
+  linkedBy       String
+  createdAt      DateTime              @default(now())
+  connection     IntegrationConnection @relation(fields: [connectionId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  matter         Matter?               @relation(fields: [matterId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  organization   Organization?         @relation(fields: [organizationId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([tenantId, provider, itemType, providerItemId])
+  @@index([tenantId, matterId, occurredAt])
+  @@index([tenantId, organizationId, occurredAt])
+}
+
+model WebhookEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  provider        String
+  providerEventId String
+  signatureValid  Boolean
+  payloadHash     String
+  status          String
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+
+  @@unique([provider, providerEventId])
+}
+
+model TimeEntry {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @db.Uuid
+  matterId     String        @db.Uuid
+  userId       String
+  minutes      Int
+  rateCents    Int
+  description  String
+  occurredOn   DateTime
+  approvedAt   DateTime?
+  invoicedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  matter       Matter        @relation(fields: [matterId], references: [id], onDelete: Restrict)
+  invoiceLines InvoiceLine[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, matterId, occurredOn])
+}
+
+model Invoice {
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @db.Uuid
+  matterId       String        @db.Uuid
+  invoiceNumber  String
+  status         InvoiceStatus @default(DRAFT)
+  amountCents    Int
+  paidCents      Int           @default(0)
+  idempotencyKey String
+  issuedAt       DateTime?
+  dueAt          DateTime?
+  createdAt      DateTime      @default(now())
+  matter         Matter        @relation(fields: [matterId], references: [id], onDelete: Restrict)
+  lines          InvoiceLine[]
+  payments       Payment[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, invoiceNumber])
+  @@unique([tenantId, idempotencyKey])
+}
+
+model LedgerAccount {
+  id          String            @id @default(uuid()) @db.Uuid
+  tenantId    String            @db.Uuid
+  name        String
+  type        LedgerAccountType
+  clientId    String?           @db.Uuid
+  active      Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  lines       LedgerLine[]
+  periodLocks PeriodLock[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, name])
+  @@index([tenantId, type, clientId])
+}
+
+model LedgerEntry {
+  id              String        @id @default(uuid()) @db.Uuid
+  tenantId        String        @db.Uuid
+  occurredAt      DateTime
+  description     String
+  idempotencyKey  String
+  reversedEntryId String?       @db.Uuid
+  createdBy       String
+  createdAt       DateTime      @default(now())
+  lines           LedgerLine[]
+  reversedEntry   LedgerEntry?  @relation("LedgerEntryReversal", fields: [reversedEntryId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  reversals       LedgerEntry[] @relation("LedgerEntryReversal")
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, reversedEntryId])
+  @@index([tenantId, occurredAt])
+}
+
+model LedgerLine {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @db.Uuid
+  entryId     String        @db.Uuid
+  accountId   String        @db.Uuid
+  debitCents  Int           @default(0)
+  creditCents Int           @default(0)
+  entry       LedgerEntry   @relation(fields: [entryId], references: [id], onDelete: Restrict)
+  account     LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, accountId])
+}
+
+model Reconciliation {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @db.Uuid
+  accountId          String    @db.Uuid
+  periodEnd          DateTime
+  bankBalanceCents   Int
+  bookBalanceCents   Int
+  clientBalanceCents Int
+  status             String
+  approvedBy         String?
+  approvedAt         DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@unique([tenantId, accountId, periodEnd])
+}
+
+model IdempotencyRecord {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  operation   String
+  key         String
+  requestHash String
+  response    Json?
+  statusCode  Int?
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, operation, key])
+  @@index([expiresAt])
+}
+
+model AccountingPeriod {
+  id        String                 @id @default(uuid()) @db.Uuid
+  tenantId  String                 @db.Uuid
+  startsAt  DateTime
+  endsAt    DateTime
+  status    AccountingPeriodStatus @default(OPEN)
+  closedBy  String?
+  closedAt  DateTime?
+  createdAt DateTime               @default(now())
+  tenant    Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  locks     PeriodLock[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, startsAt, endsAt])
+  @@index([tenantId, status, endsAt])
+}
+
+model PeriodLock {
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @db.Uuid
+  accountingPeriodId String           @db.Uuid
+  ledgerAccountId    String?          @db.Uuid
+  lockedBy           String
+  lockedAt           DateTime         @default(now())
+  reason             String?
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  accountingPeriod   AccountingPeriod @relation(fields: [accountingPeriodId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  ledgerAccount      LedgerAccount?   @relation(fields: [ledgerAccountId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([tenantId, accountingPeriodId, ledgerAccountId])
+  @@index([tenantId, lockedAt])
+}
+
+model InvoiceLine {
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @db.Uuid
+  invoiceId   String    @db.Uuid
+  timeEntryId String    @db.Uuid
+  description String
+  minutes     Int
+  rateCents   Int
+  amountCents Int
+  createdAt   DateTime  @default(now())
+  invoice     Invoice   @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  timeEntry   TimeEntry @relation(fields: [timeEntryId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([tenantId, timeEntryId])
+  @@index([tenantId, invoiceId])
+}
+
+model Payment {
+  id                  String        @id @default(uuid()) @db.Uuid
+  tenantId            String        @db.Uuid
+  invoiceId           String        @db.Uuid
+  provider            String        @default("LAWPAY")
+  lawPayPaymentId     String
+  lawPayTransactionId String?
+  providerEventId     String?
+  idempotencyKey      String
+  amountCents         Int
+  status              PaymentStatus
+  verifiedAt          DateTime
+  receivedAt          DateTime      @default(now())
+  createdAt           DateTime      @default(now())
+  invoice             Invoice       @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([tenantId, lawPayPaymentId])
+  @@unique([tenantId, providerEventId])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, invoiceId, receivedAt])
+}
+
+model RetentionPolicy {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @db.Uuid
+  recordType    String
+  retentionDays Int
+  legalHold     Boolean  @default(false)
+  active        Boolean  @default(true)
+  createdBy     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, recordType])
+  @@index([tenantId, active])
+}
+
+model EvidenceRecord {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @db.Uuid
+  recordType    String
+  recordId      String   @db.Uuid
+  evidenceType  String
+  sha256        String
+  objectKey     String?
+  objectVersion String?
+  capturedBy    String
+  capturedAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, recordType, recordId, evidenceType, sha256])
+  @@index([tenantId, recordType, recordId, capturedAt])
+}

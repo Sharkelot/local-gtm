@@ -1,0 +1,16 @@
+export { platformPrisma, prisma } from './client.js';
+export { appendAuditEvent } from './audit.js';
+export { withTenant, type TenantContext, type TenantTransaction } from './tenant.js';
+export * from './services/ai-service.js';
+export * from './services/approval-service.js';
+export * from './services/import-service.js';
+export * from './services/matter-service.js';
+export * from './services/document-service.js';
+export * from './services/communication-service.js';
+export * from './services/finance-service.js';
+export * from './services/note-service.js';
+export * from './services/membership-service.js';
+export * from './services/search-service.js';
+export * from './services/webhook-service.js';
+export * from './services/retention-evidence-service.js';
+export * from './services/client-portal-service.js';

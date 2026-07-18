@@ -1,0 +1,5 @@
+# Certificate and private-key material is delivered out of band.
+*.crt
+*.key
+*.pem
+!README.md

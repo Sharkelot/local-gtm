@@ -1,0 +1,13 @@
+[Unit]
+Description=Restrict Local GTM Redis to the Windows inference worker
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=INFERENCE_WORKER_IP=10.0.0.3
+ExecStart=/usr/local/sbin/ct600-redis-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

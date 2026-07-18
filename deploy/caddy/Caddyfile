@@ -1,0 +1,54 @@
+{
+  email ops@{$APP_DOMAIN}
+}
+
+(cloudflare_tls) {
+  tls {
+    dns cloudflare {$CLOUDFLARE_API_TOKEN}
+  }
+}
+
+{$APP_DOMAIN} {
+  # The host firewall admits this virtual host only from WireGuard/private ranges.
+  import cloudflare_tls
+  encode zstd gzip
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+  reverse_proxy web:3000 {
+    header_up X-Real-IP {remote_host}
+  }
+}
+
+{$HOOKS_DOMAIN} {
+  import cloudflare_tls
+  @webhooks {
+    method POST
+    path /api/v1/webhooks/microsoft /api/v1/webhooks/google /api/v1/webhooks/lawpay
+  }
+  handle @webhooks {
+    request_body {
+      max_size 1MB
+    }
+    reverse_proxy web:3000 {
+      header_up X-Real-IP {remote_host}
+    }
+  }
+  respond "not found" 404
+}
+
+{$KEYCLOAK_DOMAIN} {
+  # Keycloak admin access is additionally restricted by host firewall and Keycloak policy.
+  import cloudflare_tls
+  reverse_proxy keycloak:8080
+}
+
+{$GRAFANA_DOMAIN} {
+  # Grafana is private; no public monitoring route is defined here.
+  import cloudflare_tls
+  reverse_proxy grafana:3000
+}

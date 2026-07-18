@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+LEDGER.md
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/test-results
+**/playwright-report
+*.tsbuildinfo

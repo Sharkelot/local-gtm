@@ -1,0 +1,1 @@
+ALTER TABLE "ImportRun" ADD COLUMN "requestHash" TEXT NOT NULL DEFAULT '';

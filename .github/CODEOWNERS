@@ -1,0 +1,4 @@
+# Replace these placeholders with GitHub users or teams before enabling branch protection.
+* @replace-with-platform-owner
+/deploy/ @replace-with-platform-owner @replace-with-security-owner
+/.github/ @replace-with-platform-owner @replace-with-security-owner

@@ -1,0 +1,13 @@
+[Unit]
+Description=Local GTM least-privilege inter-CT forwarding
+After=network-online.target pve-firewall.service codex-bridge-eno-firewall.service
+Wants=network-online.target
+PartOf=pve-firewall.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/proxmox-local-gtm-forward.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

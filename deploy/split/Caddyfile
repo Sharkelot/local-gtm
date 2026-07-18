@@ -1,0 +1,88 @@
+{
+  email ops@{$APP_DOMAIN}
+}
+
+(cloudflare_tls) {
+  tls {
+    dns cloudflare {$CLOUDFLARE_API_TOKEN}
+  }
+}
+
+(private_https_upstream) {
+  transport http {
+    tls_trust_pool file /etc/ssl/private-ca/ca-bundle.pem
+  }
+}
+
+(trusted_proxy_headers) {
+  # Replace, rather than append to, all client-controlled forwarding headers.
+  header_up X-Real-IP {remote_host}
+  header_up X-Forwarded-For {remote_host}
+  header_up X-Forwarded-Proto {scheme}
+  header_up X-Forwarded-Host {host}
+}
+
+{$APP_DOMAIN} {
+  # The host firewall admits this virtual host only from WireGuard/private ranges.
+  import cloudflare_tls
+  encode zstd gzip
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+  reverse_proxy web:3000 {
+    import trusted_proxy_headers
+  }
+}
+
+{$HOOKS_DOMAIN} {
+  import cloudflare_tls
+  @signed_webhooks {
+    method POST
+    path /api/v1/webhooks/microsoft /api/v1/webhooks/google /api/v1/webhooks/lawpay
+  }
+  handle @signed_webhooks {
+    request_body {
+      max_size 1MB
+    }
+    reverse_proxy web:3000 {
+      import trusted_proxy_headers
+    }
+  }
+  respond "not found" 404
+}
+
+{$KEYCLOAK_DOMAIN} {
+  # The upstream is private HTTPS; firewall and Keycloak policy further restrict admin access.
+  import cloudflare_tls
+  reverse_proxy {$KEYCLOAK_UPSTREAM} {
+    import private_https_upstream
+    import trusted_proxy_headers
+  }
+}
+
+{$KEYCLOAK_ADMIN_DOMAIN} {
+  # Keycloak advertises a separate administration hostname. Until the exact
+  # WireGuard subnet is configured, restrict it to the private LAN only.
+  import cloudflare_tls
+  @approved_admin_source remote_ip 10.0.0.0/24 127.0.0.1/32
+  handle @approved_admin_source {
+    reverse_proxy {$KEYCLOAK_UPSTREAM} {
+      import private_https_upstream
+      import trusted_proxy_headers
+    }
+  }
+  respond "forbidden" 403
+}
+
+{$GRAFANA_DOMAIN} {
+  # This hostname remains private/WireGuard-only; it has no public route.
+  import cloudflare_tls
+  reverse_proxy {$GRAFANA_UPSTREAM} {
+    import private_https_upstream
+    import trusted_proxy_headers
+  }
+}
