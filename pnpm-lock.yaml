@@ -34,18 +34,13 @@ importers:
     dependencies:
       '@local-gtm/contracts':
         specifier: workspace:*
-        version: file:packages/contracts
+        version: link:../../packages/contracts
       '@local-gtm/fixtures':
         specifier: workspace:*
-        version: file:packages/fixtures
+        version: link:../../packages/fixtures
       bullmq:
         specifier: 5.61.0
         version: 5.61.0
-    dependenciesMeta:
-      '@local-gtm/contracts':
-        injected: true
-      '@local-gtm/fixtures':
-        injected: true
     devDependencies:
       '@types/node':
         specifier: 24.10.9
@@ -64,16 +59,13 @@ importers:
     dependencies:
       '@local-gtm/db':
         specifier: workspace:*
-        version: file:packages/db(prisma@6.19.1(typescript@5.9.3))(typescript@5.9.3)
+        version: link:../../packages/db
       bullmq:
         specifier: 5.71.1
         version: 5.71.1
       minio:
         specifier: 8.0.7
         version: 8.0.7
-    dependenciesMeta:
-      '@local-gtm/db':
-        injected: true
     devDependencies:
       '@types/node':
         specifier: 24.10.9
@@ -98,13 +90,13 @@ importers:
         version: 5.2.10
       '@local-gtm/contracts':
         specifier: workspace:*
-        version: file:packages/contracts
+        version: link:../../packages/contracts
       '@local-gtm/db':
         specifier: workspace:*
-        version: file:packages/db(prisma@6.19.1(typescript@5.9.3))(typescript@5.9.3)
+        version: link:../../packages/db
       '@local-gtm/domain':
         specifier: workspace:*
-        version: file:packages/domain
+        version: link:../../packages/domain
       csv-parse:
         specifier: 6.1.0
         version: 6.1.0
@@ -126,13 +118,6 @@ importers:
       zod:
         specifier: 3.25.76
         version: 3.25.76
-    dependenciesMeta:
-      '@local-gtm/contracts':
-        injected: true
-      '@local-gtm/db':
-        injected: true
-      '@local-gtm/domain':
-        injected: true
     devDependencies:
       '@playwright/test':
         specifier: 1.61.1
@@ -170,26 +155,19 @@ importers:
     dependencies:
       '@local-gtm/contracts':
         specifier: workspace:*
-        version: file:packages/contracts
+        version: link:../contracts
       '@local-gtm/domain':
         specifier: workspace:*
-        version: file:packages/domain
+        version: link:../domain
       '@local-gtm/fixtures':
         specifier: workspace:*
-        version: file:packages/fixtures
+        version: link:../fixtures
       '@prisma/client':
         specifier: 6.19.1
         version: 6.19.1(prisma@6.19.1(typescript@5.9.3))(typescript@5.9.3)
       zod:
         specifier: 3.25.76
         version: 3.25.76
-    dependenciesMeta:
-      '@local-gtm/contracts':
-        injected: true
-      '@local-gtm/domain':
-        injected: true
-      '@local-gtm/fixtures':
-        injected: true
     devDependencies:
       prisma:
         specifier: 6.19.1
@@ -211,10 +189,7 @@ importers:
     dependencies:
       '@local-gtm/contracts':
         specifier: workspace:*
-        version: file:packages/contracts
-    dependenciesMeta:
-      '@local-gtm/contracts':
-        injected: true
+        version: link:../contracts
     devDependencies:
       typescript:
         specifier: ^5.8.2
@@ -227,15 +202,10 @@ importers:
     dependencies:
       '@local-gtm/contracts':
         specifier: workspace:*
-        version: file:packages/contracts
+        version: link:../contracts
       '@local-gtm/domain':
         specifier: workspace:*
-        version: file:packages/domain
-    dependenciesMeta:
-      '@local-gtm/contracts':
-        injected: true
-      '@local-gtm/domain':
-        injected: true
+        version: link:../domain
     devDependencies:
       typescript:
         specifier: ^5.9.3
@@ -867,18 +837,6 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
-
-  '@local-gtm/contracts@file:packages/contracts':
-    resolution: {directory: packages/contracts, type: directory}
-
-  '@local-gtm/db@file:packages/db':
-    resolution: {directory: packages/db, type: directory}
-
-  '@local-gtm/domain@file:packages/domain':
-    resolution: {directory: packages/domain, type: directory}
-
-  '@local-gtm/fixtures@file:packages/fixtures':
-    resolution: {directory: packages/fixtures, type: directory}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     resolution: {integrity: sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ==}
@@ -3815,30 +3773,6 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@local-gtm/contracts@file:packages/contracts':
-    dependencies:
-      zod: 3.25.76
-
-  '@local-gtm/db@file:packages/db(prisma@6.19.1(typescript@5.9.3))(typescript@5.9.3)':
-    dependencies:
-      '@local-gtm/contracts': file:packages/contracts
-      '@local-gtm/domain': file:packages/domain
-      '@local-gtm/fixtures': file:packages/fixtures
-      '@prisma/client': 6.19.1(prisma@6.19.1(typescript@5.9.3))(typescript@5.9.3)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - prisma
-      - typescript
-
-  '@local-gtm/domain@file:packages/domain':
-    dependencies:
-      '@local-gtm/contracts': file:packages/contracts
-
-  '@local-gtm/fixtures@file:packages/fixtures':
-    dependencies:
-      '@local-gtm/contracts': file:packages/contracts
-      '@local-gtm/domain': file:packages/domain
-
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     optional: true
 
@@ -4904,7 +4838,7 @@ snapshots:
       eslint: 9.39.2(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
       eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.2(jiti@2.7.0))
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.53.1(eslint@9.39.2(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.2(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.53.1(eslint@9.39.2(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.2(jiti@2.7.0))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.39.2(jiti@2.7.0))
       eslint-plugin-react: 7.37.5(eslint@9.39.2(jiti@2.7.0))
       eslint-plugin-react-hooks: 7.1.1(eslint@9.39.2(jiti@2.7.0))
@@ -4937,7 +4871,7 @@ snapshots:
       tinyglobby: 0.2.17
       unrs-resolver: 1.12.2
     optionalDependencies:
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.53.1(eslint@9.39.2(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.2(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.53.1(eslint@9.39.2(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.2(jiti@2.7.0))
     transitivePeerDependencies:
       - supports-color
 
@@ -4952,7 +4886,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.53.1(eslint@9.39.2(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.2(jiti@2.7.0)):
+  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.53.1(eslint@9.39.2(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.2(jiti@2.7.0)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.9

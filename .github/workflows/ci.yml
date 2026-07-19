@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Format, lint, typecheck, test, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: postgresql://test:test@127.0.0.1:5432/local_gtm_test
+      INTERNAL_DATABASE_URL: postgresql://test:test@127.0.0.1:5432/local_gtm_test
+      TEST_DATABASE_URL: postgresql://test:test@127.0.0.1:5432/local_gtm_test
+      REDIS_URL: redis://127.0.0.1:6379
+      NEXTAUTH_SECRET: ci-only-secret-with-sufficient-length
+      AUTH_SECRET: ci-only-secret-with-sufficient-length
+      KEYCLOAK_CLIENT_ID: local-gtm-ci
+      KEYCLOAK_CLIENT_SECRET: ci-client-secret
+      KEYCLOAK_ISSUER: https://auth.example.test/realms/local-gtm
+      INFERENCE_WORKER_TOKEN: ci-worker-token
+      DEV_ENVELOPE_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    services:
+      postgres:
+        image: postgres:17.7-bookworm
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: local_gtm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d local_gtm_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4.7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: pnpm/action-setup@41ff726dd646dcc8963274a505a352d452795d2 # v4.2.0
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f9d6a5a2a # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @local-gtm/db db:generate
+      - run: pnpm --filter @local-gtm/db db:migrate
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm test:integration
+      - run: pnpm build
+      - run: pnpm --filter @local-gtm/db db:seed
+      - run: pnpm --filter @local-gtm/web exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+
+  docker-build:
+    name: Production image build
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: docker/setup-buildx-action@b5ca514318fb6c203bef6baf8199c721f8922d8c # v3.10.0
+      - uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: false
+          load: true
+          tags: local-gtm-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
+        with:
+          context: .
+          file: apps/platform-worker/Dockerfile
+          push: false
+          load: true
+          tags: local-gtm-platform-worker:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
+        with:
+          context: .
+          file: packages/db/Dockerfile.migrator
+          push: false
+          load: true
+          tags: local-gtm-migrator:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: pnpm/action-setup@41ff726dd646dcc8963274a505a352d452795d2 # v4.2.0
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f9d6a5a2a # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod --audit-level=high
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/dependency-review-action@3b139cfc5fae8b618d3eae167148d24b2156f5c3 # v4.7.0
+
+  filesystem-scan:
+    name: Filesystem vulnerability scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          scan-type: fs
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2

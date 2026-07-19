@@ -1,0 +1,46 @@
+# Example deployment configuration for local-gtm-deployer.
+# Copy to /etc/local-gtm/deployment.env and /etc/local-gtm/hosts.env on the
+# dedicated deployment CT. Replace every placeholder before enabling the timer.
+
+# --- GHCR image source (public read or scoped read token stored locally) ---
+GHCR_REGISTRY=ghcr.io
+GHCR_REPOSITORY=YOUR_GITHUB_OWNER/local-gtm
+IMAGE_NAME=web
+WEB_IMAGE_NAME=web
+PLATFORM_WORKER_IMAGE_NAME=platform-worker
+MIGRATOR_IMAGE_NAME=migrator
+# Optional when the package is private; store only on the deployment CT.
+# GHCR_READ_TOKEN=
+
+# --- Approved release control ---
+# Write the digest of a CI-published main commit after manual review.
+APPROVED_DIGEST_FILE=/var/lib/local-gtm-deployer/approved-digest
+CURRENT_DIGEST_FILE=/var/lib/local-gtm-deployer/current-digest
+PREVIOUS_DIGEST_FILE=/var/lib/local-gtm-deployer/previous-digest
+DEPLOY_METADATA_DIR=/var/lib/local-gtm-deployer/metadata
+LOCK_FILE=/var/lib/local-gtm-deployer/deploy.lock
+
+# --- Outbound SSH to the application CT (never use root) ---
+DEPLOY_USER=local-gtm-deploy
+CRM_HOST=APP_SERVER
+SSH_IDENTITY_FILE=/etc/local-gtm/deploy/id_ed25519
+SSH_KNOWN_HOSTS_FILE=/etc/local-gtm/deploy/known_hosts
+REMOTE_COMPOSE_DIR=/opt/local-gtm/deploy/split
+
+# --- Public health checks (HTTPS through Cloudflare Tunnel) ---
+PUBLIC_CRM_URL=https://crm.example.com
+HEALTH_TIMEOUT_SECONDS=180
+HEALTH_INTERVAL_SECONDS=5
+
+# --- Script paths on the deployment CT ---
+DEPLOY_SCRIPT=/opt/local-gtm/deploy/deploy.sh
+ROLLBACK_SCRIPT=/opt/local-gtm/deploy/rollback.sh
+HEALTH_CHECK_SCRIPT=/opt/local-gtm/deploy/health-check.sh
+DEPLOYMENT_ENV=/etc/local-gtm/deployment.env
+HOSTS_ENV=/etc/local-gtm/hosts.env
+
+# --- hosts.env placeholders (copy to /etc/local-gtm/hosts.env) ---
+# CRM_HOST=APP_SERVER
+# DATABASE_HOST=DATABASE_SERVER
+# DOCUMENT_HOST=DOCUMENT_SERVER
+# IDENTITY_HOST=IDENTITY_SERVER

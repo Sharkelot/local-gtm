@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll GHCR for approved Local GTM releases
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
