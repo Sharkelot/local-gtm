@@ -7,14 +7,8 @@
 # metrics: 127.0.0.1:20241
 #
 # ingress:
-#   # CRM application - terminates TLS at Cloudflare edge, HTTPS to origin Caddy
-#   - hostname: crm.example.com
-#     service: https://<crm-ct-ip>:443
-#     originRequest:
-#       noTLSVerify: true
-#
-#   # Keycloak authentication (proxied through Caddy)
-#   - hostname: auth.example.com
+#   # Wildcard routes all subdomains to Caddy (handles per-domain routing)
+#   - hostname: '*.example.com'
 #     service: https://<crm-ct-ip>:443
 #     originRequest:
 #       noTLSVerify: true

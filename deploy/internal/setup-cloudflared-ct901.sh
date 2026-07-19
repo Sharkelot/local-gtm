@@ -73,14 +73,9 @@ credentials-file: $CONFIG_DIR/credentials.json
 metrics: 127.0.0.1:20241
 
 ingress:
-  # CRM application
-  - hostname: crm.afterlifehigh.com
-    service: https://10.0.0.70:443
-    originRequest:
-      noTLSVerify: true
-
-  # Keycloak authentication (proxied through Caddy)
-  - hostname: auth.afterlifehigh.com
+  # Wildcard routes all *.afterlifehigh.com subdomains to Caddy on CT600.
+  # Caddy handles per-domain routing (CRM, auth, hooks, observability).
+  - hostname: '*.afterlifehigh.com'
     service: https://10.0.0.70:443
     originRequest:
       noTLSVerify: true
