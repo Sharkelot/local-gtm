@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 set -eu
 
+# shellcheck disable=SC1091
+source "${HOSTS_ENV:-/etc/local-gtm/hosts.env}"
+
+: "${CRM_HOST:?set CRM_HOST}"
+: "${INFERENCE_WORKER_IP:?set INFERENCE_WORKER_IP}"
+
 iptables=/usr/sbin/iptables
-worker_ip=${INFERENCE_WORKER_IP:-10.0.0.3}
+worker_ip=$INFERENCE_WORKER_IP
 ingress_interface=${REDIS_INGRESS_INTERFACE:-eth0}
 
-# DOCKER-USER sees the packet after DNAT, so match the original destination.
-# Scope the rules to ingress so the deny rule cannot also drop the return half
-# of an accepted connection as it leaves the Docker bridge.
-allow=( -i "$ingress_interface" -s "$worker_ip" -p tcp -m conntrack --ctorigdst 10.0.0.70 --ctorigdstport 6379 -j ACCEPT )
-deny=( -i "$ingress_interface" -p tcp -m conntrack --ctorigdst 10.0.0.70 --ctorigdstport 6379 -j DROP )
+allow=( -i "$ingress_interface" -s "$worker_ip" -p tcp -m conntrack --ctorigdst "$CRM_HOST" --ctorigdstport 6379 -j ACCEPT )
+deny=( -i "$ingress_interface" -p tcp -m conntrack --ctorigdst "$CRM_HOST" --ctorigdstport 6379 -j DROP )
 
-# Remove the original unscoped rules during an in-place upgrade. Their deny
-# rule also matched Redis replies and made the source allowlist one-way only.
-legacy_allow=( -s "$worker_ip" -p tcp -m conntrack --ctorigdst 10.0.0.70 --ctorigdstport 6379 -j ACCEPT )
-legacy_deny=( -p tcp -m conntrack --ctorigdst 10.0.0.70 --ctorigdstport 6379 -j DROP )
+legacy_allow=( -s "$worker_ip" -p tcp -m conntrack --ctorigdst "$CRM_HOST" --ctorigdstport 6379 -j ACCEPT )
+legacy_deny=( -p tcp -m conntrack --ctorigdst "$CRM_HOST" --ctorigdstport 6379 -j DROP )
 while "$iptables" -C DOCKER-USER "${legacy_allow[@]}" 2>/dev/null; do
   "$iptables" -D DOCKER-USER "${legacy_allow[@]}"
 done

@@ -5,7 +5,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-Environment=INFERENCE_WORKER_IP=10.0.0.3
+EnvironmentFile=/etc/local-gtm/hosts.env
 ExecStart=/usr/local/sbin/ct600-redis-firewall.sh
 RemainAfterExit=yes
 

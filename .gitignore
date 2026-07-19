@@ -17,6 +17,26 @@ test-results/
 !.env.example
 *.local
 secrets/
+/etc/local-gtm/
+
+# Operator-only deployment artifacts (never commit populated copies)
+deploy/split/*.env
+!deploy/split/*.env.example
+deploy/split/**/tls/*.crt
+deploy/split/**/tls/*.key
+deploy/split/**/tls/*.pem
+deploy/split/minio/certs/*.crt
+deploy/split/minio/certs/*.key
+deploy/split/postgres/tls/*.crt
+deploy/split/postgres/tls/*.key
+deploy/split/openbao/tls/*.crt
+deploy/split/openbao/tls/*.key
+
+# Production-specific reverse-proxy and tunnel configs (local operator copies)
+deploy/split/cloudflared-config.yml
+deploy/split/crm-*-nginx.conf
+deploy/split/npm-crm*.conf
+deploy/split/CRM-NGINX-DEPLOYMENT-NOTES.md
 
 # Runtime data
 .data/
@@ -24,6 +44,11 @@ postgres-data/
 redis-data/
 minio-data/
 openbao-data/
+
+# PKI output and backups
+pki-output/
+*.p12
+*.jks
 
 # Editors and OS
 .idea/

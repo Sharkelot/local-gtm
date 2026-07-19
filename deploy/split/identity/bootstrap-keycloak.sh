@@ -5,6 +5,7 @@ required=(
   KC_BOOTSTRAP_ADMIN_USERNAME KC_BOOTSTRAP_ADMIN_PASSWORD
   KEYCLOAK_CLIENT_ID KEYCLOAK_CLIENT_SECRET
   EVE_ADMIN_PASSWORD REALM_ADMIN_PASSWORD
+  KEYCLOAK_SERVER APP_DOMAIN KEYCLOAK_REALM_ADMIN_EMAIL
 )
 for name in "${required[@]}"; do
   if [ -z "${!name:-}" ]; then
@@ -13,12 +14,13 @@ for name in "${required[@]}"; do
   fi
 done
 
-server=https://10.0.0.73:8443
+server=$KEYCLOAK_SERVER
 realm=legal-crm
 config=/tmp/local-gtm-kcadm.config
 truststore=/tmp/local-gtm-admin-truststore.p12
 trustpass=local-gtm-ca-trust
 kcadm=/opt/keycloak/bin/kcadm.sh
+crm_base_url="https://${APP_DOMAIN}"
 
 rm -f "$truststore"
 keytool -importcert -noprompt -alias local-gtm-inter-ct-ca \
@@ -69,9 +71,9 @@ client_settings=(
   -s standardFlowEnabled=true
   -s directAccessGrantsEnabled=false
   -s serviceAccountsEnabled=false
-  -s 'redirectUris=["https://crm.afterlifehigh.com/api/auth/callback/keycloak"]'
-  -s 'webOrigins=["https://crm.afterlifehigh.com"]'
-  -s 'attributes={"post.logout.redirect.uris":"https://crm.afterlifehigh.com/*","pkce.code.challenge.method":"S256"}'
+  -s "redirectUris=[\"${crm_base_url}/api/auth/callback/keycloak\"]"
+  -s "webOrigins=[\"${crm_base_url}\"]"
+  -s "attributes={\"post.logout.redirect.uris\":\"${crm_base_url}/*\",\"pkce.code.challenge.method\":\"S256\"}"
 )
 if [ -z "$client_uuid" ]; then
   kc create clients -r "$realm" "${client_settings[@]}" >/dev/null
@@ -104,7 +106,7 @@ ensure_user() {
 }
 
 ensure_user eve-admin eve.admin@example.test "$EVE_ADMIN_PASSWORD" Eve Administrator
-ensure_user local-gtm-realm-admin crm.admin@afterlifehigh.com \
+ensure_user local-gtm-realm-admin "$KEYCLOAK_REALM_ADMIN_EMAIL" \
   "$REALM_ADMIN_PASSWORD" Local-GTM Administrator
 
 # This operation is idempotent in Keycloak; it does not broaden the application user.

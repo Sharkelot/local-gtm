@@ -3,9 +3,9 @@
 param(
   [Parameter(Mandatory)] [Security.SecureString] $InferenceWorkerToken,
   [Parameter(Mandatory)] [Security.SecureString] $RedisPassword,
-  [string] $InternalApiUrl = 'https://crm.afterlifehigh.com',
-  [string] $InternalApiConnectHost = '10.0.0.70',
-  [string] $RedisHost = '10.0.0.70',
+  [string] $InternalApiUrl = 'https://crm.example.com',
+  [string] $InternalApiConnectHost = '192.0.2.70',
+  [string] $RedisHost = '192.0.2.70',
   [int] $RedisPort = 6379,
   [string] $LmStudioBaseUrl = 'http://127.0.0.1:1234',
   [int] $HeartbeatIntervalMs = 30000,

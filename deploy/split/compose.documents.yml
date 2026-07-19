@@ -68,7 +68,7 @@ services:
     image: clamav/clamav:1.4.3_base
     <<: [*restart, *json-logging]
     # The platform worker runs on app CT 600. Bind clamd only to CT 602's private
-    # address and enforce a host-firewall allow rule for source 10.0.0.70 only.
+    # address and enforce a host-firewall allow rule for source ${CRM_HOST} only.
     ports:
       - '${DOCUMENTS_PRIVATE_BIND_IP}:3310:3310'
     networks: [documents]

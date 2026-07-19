@@ -24,9 +24,9 @@ The installer:
   pinned SHA-256 before use;
 - stores the two service secrets with machine-scope Windows DPAPI;
 - restricts the install directory to `SYSTEM` and local administrators;
-- connects to `10.0.0.70` while keeping `crm.afterlifehigh.com` as the HTTPS
-  Host/SNI name, so certificate verification remains enabled without public
-  exposure or a hosts-file change;
+- connects to the application CT private address while keeping the public CRM
+  hostname as the HTTPS Host/SNI name, so certificate verification remains enabled
+  without public exposure or a hosts-file change;
 - runs as LocalSystem with automatic delayed start and bounded log rotation.
 
 LM Studio must expose its OpenAI-compatible server only on

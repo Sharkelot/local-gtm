@@ -11,3 +11,13 @@ LEDGER.md
 **/test-results
 **/playwright-report
 *.tsbuildinfo
+deploy/split/*.env
+deploy/split/**/tls
+deploy/split/minio/certs/*.crt
+deploy/split/minio/certs/*.key
+deploy/split/cloudflared-config.yml
+deploy/split/npm-crm*.conf
+deploy/split/crm-*-nginx.conf
+docs/compliance
+pki-output/
+secrets/

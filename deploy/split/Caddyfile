@@ -68,7 +68,7 @@
   # Keycloak advertises a separate administration hostname. Until the exact
   # WireGuard subnet is configured, restrict it to the private LAN only.
   import cloudflare_tls
-  @approved_admin_source remote_ip 10.0.0.0/24 127.0.0.1/32
+  @approved_admin_source remote_ip {$PRIVATE_ADMIN_CIDR} 127.0.0.1/32
   handle @approved_admin_source {
     reverse_proxy {$KEYCLOAK_UPSTREAM} {
       import private_https_upstream

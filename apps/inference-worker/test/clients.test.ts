@@ -8,7 +8,7 @@ import {
 
 describe('platform transport safety', () => {
   it('requires HTTPS for the internal API', () => {
-    expect(() => new HttpPlatformClient('http://10.0.0.70', 'token')).toThrow(
+    expect(() => new HttpPlatformClient('http://192.0.2.70', 'token')).toThrow(
       'INTERNAL_API_URL must use HTTPS.',
     );
   });
