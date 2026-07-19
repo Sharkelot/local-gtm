@@ -18,6 +18,7 @@ source "${HOSTS_ENV:-/etc/local-gtm/hosts.env}"
 : "${WEB_IMAGE_NAME:?set WEB_IMAGE_NAME}"
 : "${PLATFORM_WORKER_IMAGE_NAME:?set PLATFORM_WORKER_IMAGE_NAME}"
 : "${REMOTE_COMPOSE_DIR:?set REMOTE_COMPOSE_DIR}"
+: "${REMOTE_ENV_FILE:?set REMOTE_ENV_FILE, e.g. /etc/local-gtm/app.env}"
 
 if [ ! -s "$PREVIOUS_DIGEST_FILE" ]; then
   echo "no previous digest recorded; manual intervention required" >&2
@@ -46,7 +47,7 @@ compose_dir=$3
 cd "$compose_dir"
 export WEB_IMAGE="$web_ref"
 export PLATFORM_WORKER_IMAGE="$worker_ref"
-docker compose --env-file /etc/local-gtm/crm.env -f compose.app.yml up -d --no-build
+docker compose --env-file "$REMOTE_ENV_FILE" -f compose.app.yml up -d --no-build
 REMOTE
 
 printf '%s\n' "$previous_digest" > "$CURRENT_DIGEST_FILE"

@@ -27,6 +27,7 @@ source "${HOSTS_ENV:-/etc/local-gtm/hosts.env}"
 : "${PLATFORM_WORKER_IMAGE_NAME:?set PLATFORM_WORKER_IMAGE_NAME}"
 : "${MIGRATOR_IMAGE_NAME:?set MIGRATOR_IMAGE_NAME}"
 : "${REMOTE_COMPOSE_DIR:?set REMOTE_COMPOSE_DIR}"
+: "${REMOTE_ENV_FILE:?set REMOTE_ENV_FILE, e.g. /etc/local-gtm/app.env}"
 : "${HEALTH_CHECK_SCRIPT:?set HEALTH_CHECK_SCRIPT}"
 : "${ROLLBACK_SCRIPT:?set ROLLBACK_SCRIPT}"
 
@@ -83,7 +84,7 @@ set -euo pipefail
 migrator_ref=$1
 compose_dir=$2
 cd "$compose_dir"
-docker compose --env-file /etc/local-gtm/crm.env -f compose.app.yml --profile migration run --rm migrator
+docker compose --env-file "$REMOTE_ENV_FILE" -f compose.app.yml --profile migration run --rm migrator
 REMOTE
 
 log "deploy application stack"
@@ -95,7 +96,7 @@ compose_dir=$3
 cd "$compose_dir"
 export WEB_IMAGE="$web_ref"
 export PLATFORM_WORKER_IMAGE="$worker_ref"
-docker compose --env-file /etc/local-gtm/crm.env -f compose.app.yml up -d --no-build
+docker compose --env-file "$REMOTE_ENV_FILE" -f compose.app.yml up -d --no-build
 REMOTE
 
 if ! "$HEALTH_CHECK_SCRIPT"; then
