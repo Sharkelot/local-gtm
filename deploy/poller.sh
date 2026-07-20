@@ -1,63 +1,124 @@
 #!/usr/bin/env bash
-# Poll GHCR for the newest approved main-branch image digest.
-# Copy to the deployment CT and configure via /etc/local-gtm/deployment.env.
+# Poll GitHub for the latest successful publish workflow run and its release manifest.
+# Downloads the manifest, validates it, and triggers deployment if different from current.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck disable=SC1091
+# shellcheck disable=SC1090
 source "${DEPLOYMENT_ENV:-/etc/local-gtm/deployment.env}"
 
-: "${GHCR_REGISTRY:?set GHCR_REGISTRY, e.g. ghcr.io}"
 : "${GHCR_REPOSITORY:?set GHCR_REPOSITORY, e.g. owner/local-gtm}"
-: "${IMAGE_NAME:?set IMAGE_NAME, e.g. web}"
-: "${APPROVED_DIGEST_FILE:?set APPROVED_DIGEST_FILE}"
-: "${CURRENT_DIGEST_FILE:?set CURRENT_DIGEST_FILE}"
+: "${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY (owner/repo) for artifact download}"
+: "${APPROVED_COMMIT_FILE:?set APPROVED_COMMIT_FILE}"
+: "${CURRENT_RELEASE_FILE:?set CURRENT_RELEASE_FILE}"
 : "${DEPLOY_SCRIPT:?set DEPLOY_SCRIPT}"
+: "${POLL_LOCK_FILE:=/tmp/local-gtm-poller.lock}"
+: "${GHCR_READ_TOKEN:=}"
 
 log() {
   printf '[local-gtm-poller] %s\n' "$*" >&2
 }
 
-resolve_main_digest() {
-  local token=""
-  if [ -n "${GHCR_READ_TOKEN:-}" ]; then
-    token=$(printf 'Bearer %s' "$GHCR_READ_TOKEN")
-  fi
+# Acquire poll lock — prevents concurrent poller invocations from racing
+exec 8>"$POLL_LOCK_FILE"
+if ! flock -n 8; then
+  log "another poller is running; exiting"
+  exit 75
+fi
 
-  local manifest_url="https://${GHCR_REGISTRY}/v2/${GHCR_REPOSITORY}/${IMAGE_NAME}/manifests/main"
-  local digest
-  digest=$(
-    curl -fsSL \
-      ${token:+-H "Authorization: $token"} \
-      -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-      -I "$manifest_url" |
-      awk -F': ' 'tolower($1)=="docker-content-digest"{print $2; exit}' |
-      tr -d '\r'
-  )
+fetch_manifest_artifact() {
+  local commit="$1"
+  local artifact_name="release-manifest-${commit}"
 
-  if [ -z "$digest" ]; then
-    log "unable to resolve digest for ${GHCR_REPOSITORY}/${IMAGE_NAME}:main"
+  # GitHub API: find the artifact
+  local api_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${artifact_name}&per_page=1"
+  local auth_header=""
+  [ -n "$GHCR_READ_TOKEN" ] && auth_header="Authorization: Bearer ${GHCR_READ_TOKEN}"
+
+  local download_url
+  download_url=$(curl -fsSL ${auth_header:+-H "$auth_header"} "$api_url" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    artifacts = data.get('artifacts', [])
+    if artifacts:
+        print(artifacts[0]['archive_download_url'])
+except Exception:
+    sys.exit(1)
+" 2>/dev/null || true)
+
+  if [ -z "$download_url" ]; then
+    log "no manifest artifact found for commit ${commit}"
     return 1
   fi
-  printf '%s\n' "$digest"
+
+  # Download and extract manifest from zip
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  curl -fsSL ${auth_header:+-H "$auth_header"} -o "${tmp_dir}/artifact.zip" "$download_url"
+  unzip -q -o "${tmp_dir}/artifact.zip" -d "$tmp_dir" 2>/dev/null || true
+
+  local manifest_file="${tmp_dir}/release-manifest.json"
+  if [ ! -f "$manifest_file" ]; then
+    log "manifest not found in artifact archive for commit ${commit}"
+    return 1
+  fi
+
+  # Copy to a stable location with atomic write (temp + mv)
+  local dest="${tmp_dir}/../release-manifest-${commit}.json"
+  local tmp_dest
+  tmp_dest=$(mktemp "${dest}.XXXXXX")
+  cp "$manifest_file" "$tmp_dest"
+  mv -f "$tmp_dest" "$dest"
+
+  echo "$dest"
 }
 
-approved_digest=$(tr -d '[:space:]' < "$APPROVED_DIGEST_FILE")
-current_digest=""
-if [ -f "$CURRENT_DIGEST_FILE" ]; then
-  current_digest=$(tr -d '[:space:]' < "$CURRENT_DIGEST_FILE")
+# Read approved commit
+if [ ! -f "$APPROVED_COMMIT_FILE" ]; then
+  log "no approved commit file at ${APPROVED_COMMIT_FILE}; exiting"
+  exit 0
 fi
+approved_commit=$(tr -d '[:space:]' < "$APPROVED_COMMIT_FILE")
 
-candidate_digest=$(resolve_main_digest)
-
-if [ "$candidate_digest" != "$approved_digest" ]; then
-  log "candidate digest is not on the approved list; exiting"
+if [ -z "$approved_commit" ]; then
+  log "approved commit is empty; exiting"
   exit 0
 fi
 
-if [ "$candidate_digest" = "$current_digest" ]; then
-  log "already deployed digest ${candidate_digest}; exiting"
-  exit 0
+# Validate commit format before proceeding
+if ! [[ "$approved_commit" =~ ^[a-f0-9]{7,40}$ ]]; then
+  log "invalid approved commit format: ${approved_commit}"
+  exit 1
 fi
 
-exec "$DEPLOY_SCRIPT" "$candidate_digest"
+manifest_path=$(fetch_manifest_artifact "$approved_commit") || {
+  log "could not fetch manifest for approved commit ${approved_commit}"
+  exit 1
+}
+
+if [ ! -f "$manifest_path" ]; then
+  log "manifest file missing after fetch: ${manifest_path}"
+  exit 1
+fi
+
+# Validate
+if ! bash "${SCRIPT_DIR}/release-manifest.sh" validate "$manifest_path"; then
+  log "invalid manifest for commit ${approved_commit}"
+  exit 67
+fi
+
+# Check if already deployed (atomic read — file is small, single cp is safe)
+if [ -f "$CURRENT_RELEASE_FILE" ]; then
+  current_commit=$(bash "${SCRIPT_DIR}/release-manifest.sh" get-commit "$CURRENT_RELEASE_FILE" 2>/dev/null || echo "")
+  if [ "$approved_commit" = "$current_commit" ]; then
+    log "already deployed commit ${approved_commit}; exiting"
+    exit 0
+  fi
+fi
+
+log "deploying commit ${approved_commit}"
+exec "$DEPLOY_SCRIPT" "$manifest_path"
