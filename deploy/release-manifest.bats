@@ -833,6 +833,8 @@ GHCR_READ_TOKEN=
 EXPECTED_WEB_REPOSITORY=${EXPECTED_WEB_REPOSITORY}
 EXPECTED_PLATFORM_WORKER_REPOSITORY=${EXPECTED_PLATFORM_WORKER_REPOSITORY}
 EXPECTED_MIGRATOR_REPOSITORY=${EXPECTED_MIGRATOR_REPOSITORY}
+CURRENT_RELEASE_FILE=${TEST_DIR}/current-release.json
+PREVIOUS_RELEASE_FILE=${TEST_DIR}/previous-release.json
 EOF
   export DEPLOYMENT_ENV="${TEST_DIR}/deployment.env"
   export PATH="${MOCK_BIN}:$PATH"
@@ -1232,7 +1234,7 @@ replace_env_line() {
   if command -v cygpath >/dev/null 2>&1; then
     native_file=$(cygpath -w "$file")
   fi
-  python - "$native_file" "$key" "$replacement" <<'PY'
+  python3 - "$native_file" "$key" "$replacement" <<'PY'
 import sys
 path, key, replacement = sys.argv[1:]
 with open(path, encoding='utf-8') as handle:
@@ -1249,7 +1251,7 @@ remove_env_line() {
   if command -v cygpath >/dev/null 2>&1; then
     native_file=$(cygpath -w "$file")
   fi
-  python - "$native_file" "$key" <<'PY'
+  python3 - "$native_file" "$key" <<'PY'
 import sys
 path, key = sys.argv[1:]
 with open(path, encoding='utf-8') as handle:
@@ -1267,7 +1269,7 @@ read_single_quoted_env_value() {
   if command -v cygpath >/dev/null 2>&1; then
     native_file=$(cygpath -w "$file")
   fi
-  python - "$native_file" "$key" <<'PY'
+  python3 - "$native_file" "$key" <<'PY'
 import sys
 path, key = sys.argv[1:]
 prefix = key + '='
