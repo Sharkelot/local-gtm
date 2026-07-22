@@ -28,7 +28,13 @@ log() { printf '[release-manifest] %s\n' "$*" >&2; }
 # Cross-platform path helper: convert MSYS paths to native for Windows binaries
 _to_native_path() {
 	if command -v cygpath &>/dev/null; then
-		cygpath -w "$1" 2>/dev/null || echo "$1"
+		local result
+		result=$(cygpath -w "$1" 2>/dev/null)
+		if [[ -n "$result" && -f "$result" ]]; then
+			echo "$result"
+		else
+			echo "$1"
+		fi
 	else
 		echo "$1"
 	fi
@@ -45,7 +51,7 @@ validate_digest() {
 }
 
 validate_repository() {
-	# Repository must match: registry/owner/name pattern.
+	# Repository must be lowercase and match: registry/owner/name pattern.
 	# Reject path traversal, spaces, and shell metacharacters.
 	local repo="$1"
 	if [[ -z "$repo" ]]; then
@@ -55,20 +61,66 @@ validate_repository() {
 	if [[ "$repo" != */* ]]; then
 		return 1
 	fi
-	# Reject path traversal, spaces, and dangerous characters
-	if [[ "$repo" == *..* ]] || [[ "$repo" == *[\ \;\|\&\$\`\']* ]]; then
+	# Reject path traversal
+	if [[ "$repo" == *..* ]]; then
 		return 1
 	fi
-	# Must match basic OCI registry pattern: hostname/path[/path...]
-	if [[ ! "$repo" =~ ^[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)+$ ]]; then
+	# Must be lowercase with allowed chars only
+	if [[ ! "$repo" =~ ^[a-z0-9._-]+(/[a-z0-9._-]+)+$ ]]; then
 		return 1
 	fi
 	return 0
 }
 
+validate_repository_allowlist() {
+	# Validate manifest repositories against the mandatory configured allowlist.
+	local manifest_file="$1"
+	local native_file actual
+	native_file=$(_to_native_path "$manifest_file")
+	local web_ok=true worker_ok=true migrator_ok=true
+
+	actual=$(jq -r '.images.web.repository' "$native_file" 2>/dev/null)
+	if [[ "$actual" != "$EXPECTED_WEB_REPOSITORY" ]]; then
+		echo "images.web.repository: does not match configured repository" >&2
+		web_ok=false
+	fi
+
+	actual=$(jq -r '.images.platformWorker.repository' "$native_file" 2>/dev/null)
+	if [[ "$actual" != "$EXPECTED_PLATFORM_WORKER_REPOSITORY" ]]; then
+		echo "images.platformWorker.repository: does not match configured repository" >&2
+		worker_ok=false
+	fi
+
+	actual=$(jq -r '.images.migrator.repository' "$native_file" 2>/dev/null)
+	if [[ "$actual" != "$EXPECTED_MIGRATOR_REPOSITORY" ]]; then
+		echo "images.migrator.repository: does not match configured repository" >&2
+		migrator_ok=false
+	fi
+
+	if ! $web_ok || ! $worker_ok || ! $migrator_ok; then
+		return 1
+	fi
+	return 0
+}
+
+require_repository_allowlist() {
+	local name value
+	for name in EXPECTED_WEB_REPOSITORY EXPECTED_PLATFORM_WORKER_REPOSITORY EXPECTED_MIGRATOR_REPOSITORY; do
+		value=${!name:-}
+		if [[ -z "$value" ]]; then
+			echo "repository allowlist is incomplete: set ${name}" >&2
+			return 1
+		fi
+		if ! validate_repository "$value"; then
+			echo "repository allowlist contains an invalid repository in ${name}" >&2
+			return 1
+		fi
+	done
+}
+
 validate_commit() {
-	# Git SHA: at least 7 hex characters, no injection chars
-	if [[ "$1" =~ ^[a-f0-9]{7,40}$ ]]; then
+	# Full Git SHA-1: exactly 40 lowercase hex characters.
+	if [[ "$1" =~ ^[a-f0-9]{40}$ ]]; then
 		return 0
 	fi
 	return 1
@@ -96,7 +148,7 @@ parse_manifest() {
 	# Validate JSON structure and schema version using jq
 	if ! jq -e "
 		.schemaVersion == ${SCHEMA_VERSION}
-		and (.commit | type == \"string\" and length >= 7)
+		and (.commit | type == \"string\" and length == 40)
 		and (.createdAt | type == \"string\")
 		and (.images | has(\"web\", \"platformWorker\", \"migrator\"))
 		and (.images.web   | has(\"repository\", \"digest\"))
@@ -126,7 +178,7 @@ generate() {
 
 	# Validate commit SHA
 	if ! validate_commit "$commit"; then
-		echo "invalid commit format: expected 7-40 hex characters" >&2
+		echo "invalid commit format: expected exactly 40 lowercase hex characters" >&2
 		exit 65
 	fi
 
@@ -145,20 +197,6 @@ generate() {
 			exit 65
 		fi
 	done
-
-	# Ensure digests are distinct (web, worker, migrator must differ)
-	if [[ "$web_digest" == "$worker_digest" ]]; then
-		echo "web and platformWorker digests must be distinct" >&2
-		exit 65
-	fi
-	if [[ "$web_digest" == "$migrator_digest" ]]; then
-		echo "web and migrator digests must be distinct" >&2
-		exit 65
-	fi
-	if [[ "$worker_digest" == "$migrator_digest" ]]; then
-		echo "platformWorker and migrator digests must be distinct" >&2
-		exit 65
-	fi
 
 	local created_at
 	created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -193,6 +231,10 @@ validate() {
 	fi
 
 	local file="$1"
+
+	if ! require_repository_allowlist; then
+		exit 78
+	fi
 
 	if [[ ! -f "$file" ]]; then
 		echo "manifest file not found: $file" >&2
@@ -243,15 +285,9 @@ validate() {
 			((errors++)) || true
 		fi
 
-		# Check that all three image digests are distinct
-		local web_digest worker_digest migrator_digest
-		web_digest=$(jq -r '.images.web.digest' "$native_file")
-		worker_digest=$(jq -r '.images.platformWorker.digest' "$native_file")
-		migrator_digest=$(jq -r '.images.migrator.digest' "$native_file")
-		if [[ "$web_digest" == "$worker_digest" ]] || \
-		   [[ "$web_digest" == "$migrator_digest" ]] || \
-		   [[ "$worker_digest" == "$migrator_digest" ]]; then
-			echo "images: web, platformWorker, and migrator must have distinct digests" >&2
+		# Validate repository allowlist (if configured)
+		if ! validate_repository_allowlist "$file"; then
+			echo "images: repository allowlist check failed" >&2
 			((errors++)) || true
 		fi
 
@@ -266,6 +302,11 @@ import json, sys, re
 
 file_path = sys.argv[1]
 schema_version = int(sys.argv[2])
+expected_repositories = {
+    'web': sys.argv[3],
+    'platformWorker': sys.argv[4],
+    'migrator': sys.argv[5],
+}
 
 try:
     with open(file_path, 'r') as f:
@@ -282,8 +323,8 @@ if sv != schema_version:
     errors += 1
 
 commit = m.get('commit', '')
-if not isinstance(commit, str) or not re.match(r'^[a-f0-9]{7,40}$', commit):
-    print('commit: invalid format (expected 7-40 hex chars)', file=sys.stderr)
+if not isinstance(commit, str) or not re.match(r'^[a-f0-9]{40}$', commit):
+    print('commit: invalid format (expected 40 lowercase hex chars)', file=sys.stderr)
     errors += 1
 
 created_at = m.get('createdAt', '')
@@ -292,9 +333,8 @@ if not isinstance(created_at, str) or not re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d
     errors += 1
 
 digest_re = re.compile(r'^sha256:[a-f0-9]{64}$')
-repo_re = re.compile(r'^[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)+$')
+repo_re = re.compile(r'^[a-z0-9._-]+(/[a-z0-9._-]+)+$')
 images = m.get('images', {})
-digests_seen = []
 
 for key in ['web', 'platformWorker', 'migrator']:
     img = images.get(key, {})
@@ -307,18 +347,18 @@ for key in ['web', 'platformWorker', 'migrator']:
     if not isinstance(repo, str) or not repo_re.match(repo):
         print(f'images.{key}.repository: invalid format', file=sys.stderr)
         errors += 1
+    elif repo != expected_repositories[key]:
+        print(f'images.{key}.repository: does not match configured repository', file=sys.stderr)
+        errors += 1
     if not isinstance(digest, str) or not digest_re.match(digest):
         print(f'images.{key}.digest: invalid format', file=sys.stderr)
         errors += 1
-    digests_seen.append(digest)
-
-# Check distinct digests
-if len(set(digests_seen)) != len(digests_seen):
-    print('images: web, platformWorker, and migrator must have distinct digests', file=sys.stderr)
-    errors += 1
 
 sys.exit(errors)
-" "$file" "$SCHEMA_VERSION"
+" "$file" "$SCHEMA_VERSION" \
+				"$EXPECTED_WEB_REPOSITORY" \
+				"$EXPECTED_PLATFORM_WORKER_REPOSITORY" \
+				"$EXPECTED_MIGRATOR_REPOSITORY"
 		else
 			echo "jq or python3 is required for manifest validation" >&2
 			exit 70
