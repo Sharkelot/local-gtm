@@ -228,7 +228,7 @@ jobs:
           tags: local-gtm-web:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
+      - uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
         with:
           context: .
           file: apps/platform-worker/Dockerfile
@@ -237,7 +237,7 @@ jobs:
           tags: local-gtm-platform-worker:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
+      - uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
         with:
           context: .
           file: packages/db/Dockerfile.migrator
