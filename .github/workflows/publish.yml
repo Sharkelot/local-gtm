@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: read
 
 concurrency:
   group: publish-main
@@ -23,6 +24,12 @@ jobs:
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      web_digest: ${{ steps.web.outputs.digest }}
+      worker_digest: ${{ steps.worker.outputs.digest }}
+      migrator_digest: ${{ steps.migrator.outputs.digest }}
+      head_sha: ${{ github.event.workflow_run.head_sha }}
+      ghcr_repository: ${{ steps.repository.outputs.repository }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -33,45 +40,112 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Derive lowercase GHCR repository
+        id: repository
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "repository=${repository}" >> "$GITHUB_OUTPUT"
       - name: Publish web image
+        id: web
         uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
         with:
           context: .
           file: apps/web/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/web:${{ github.event.workflow_run.head_sha }}
-            ghcr.io/${{ github.repository }}/web:main
+            ${{ steps.repository.outputs.repository }}/web:${{ github.event.workflow_run.head_sha }}
+            ${{ steps.repository.outputs.repository }}/web:main
           labels: |
             org.opencontainers.image.source=${{ github.repositoryUrl }}
             org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Publish platform worker image
+        id: worker
         uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
         with:
           context: .
           file: apps/platform-worker/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/platform-worker:${{ github.event.workflow_run.head_sha }}
-            ghcr.io/${{ github.repository }}/platform-worker:main
+            ${{ steps.repository.outputs.repository }}/platform-worker:${{ github.event.workflow_run.head_sha }}
+            ${{ steps.repository.outputs.repository }}/platform-worker:main
           labels: |
             org.opencontainers.image.source=${{ github.repositoryUrl }}
             org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Publish migrator image
+        id: migrator
         uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
         with:
           context: .
           file: packages/db/Dockerfile.migrator
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/migrator:${{ github.event.workflow_run.head_sha }}
-            ghcr.io/${{ github.repository }}/migrator:main
+            ${{ steps.repository.outputs.repository }}/migrator:${{ github.event.workflow_run.head_sha }}
+            ${{ steps.repository.outputs.repository }}/migrator:main
           labels: |
             org.opencontainers.image.source=${{ github.repositoryUrl }}
             org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  generate-manifest:
+    name: Generate release manifest
+    needs: publish
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Generate release manifest
+        run: |
+          bash deploy/release-manifest.sh generate \
+            "${{ needs.publish.outputs.head_sha }}" \
+            "${{ needs.publish.outputs.ghcr_repository }}/web" \
+            "${{ needs.publish.outputs.web_digest }}" \
+            "${{ needs.publish.outputs.ghcr_repository }}/platform-worker" \
+            "${{ needs.publish.outputs.worker_digest }}" \
+            "${{ needs.publish.outputs.ghcr_repository }}/migrator" \
+            "${{ needs.publish.outputs.migrator_digest }}" \
+            > release-manifest.json
+      - name: Validate release manifest
+        run: bash deploy/release-manifest.sh validate release-manifest.json
+        env:
+          EXPECTED_WEB_REPOSITORY: ${{ needs.publish.outputs.ghcr_repository }}/web
+          EXPECTED_PLATFORM_WORKER_REPOSITORY: ${{ needs.publish.outputs.ghcr_repository }}/platform-worker
+          EXPECTED_MIGRATOR_REPOSITORY: ${{ needs.publish.outputs.ghcr_repository }}/migrator
+      - name: Upload release manifest artifact
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: release-manifest-${{ needs.publish.outputs.head_sha }}
+          path: release-manifest.json
+          retention-days: 90
+
+  verify-anonymous-pulls:
+    name: Verify anonymous GHCR pulls
+    needs: publish
+    permissions: {}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Pull every published digest without registry credentials
+        env:
+          GHCR_REPOSITORY: ${{ needs.publish.outputs.ghcr_repository }}
+          WEB_DIGEST: ${{ needs.publish.outputs.web_digest }}
+          WORKER_DIGEST: ${{ needs.publish.outputs.worker_digest }}
+          MIGRATOR_DIGEST: ${{ needs.publish.outputs.migrator_digest }}
+        run: |
+          set -euo pipefail
+          # Force a pristine Docker config directory — no inherited credentials.
+          export DOCKER_CONFIG="$(mktemp -d)"
+          test -z "${DOCKER_AUTH_CONFIG:-}"
+          docker pull "${GHCR_REPOSITORY}/web@${WEB_DIGEST}"
+          docker pull "${GHCR_REPOSITORY}/platform-worker@${WORKER_DIGEST}"
+          docker pull "${GHCR_REPOSITORY}/migrator@${MIGRATOR_DIGEST}"

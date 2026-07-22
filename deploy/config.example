@@ -4,28 +4,40 @@
 
 # --- GHCR image source (public read or scoped read token stored locally) ---
 GHCR_REGISTRY=ghcr.io
-GHCR_REPOSITORY=YOUR_GITHUB_OWNER/local-gtm
-IMAGE_NAME=web
-WEB_IMAGE_NAME=web
-PLATFORM_WORKER_IMAGE_NAME=platform-worker
-MIGRATOR_IMAGE_NAME=migrator
+GHCR_REPOSITORY=your-github-owner/local-gtm
 # Optional when the package is private; store only on the deployment CT.
 # GHCR_READ_TOKEN=
 
+# --- GitHub repository for manifest artifact download ---
+GITHUB_REPOSITORY=your-github-owner/local-gtm
+
+# --- Required immutable image repository allowlist ---
+EXPECTED_WEB_REPOSITORY=ghcr.io/your-github-owner/local-gtm/web
+EXPECTED_PLATFORM_WORKER_REPOSITORY=ghcr.io/your-github-owner/local-gtm/platform-worker
+EXPECTED_MIGRATOR_REPOSITORY=ghcr.io/your-github-owner/local-gtm/migrator
+
 # --- Approved release control ---
-# Write the digest of a CI-published main commit after manual review.
-APPROVED_DIGEST_FILE=/var/lib/local-gtm-deployer/approved-digest
-CURRENT_DIGEST_FILE=/var/lib/local-gtm-deployer/current-digest
-PREVIOUS_DIGEST_FILE=/var/lib/local-gtm-deployer/previous-digest
+# Write the Git commit SHA (full length) of a CI-published main commit after manual review.
+APPROVED_COMMIT_FILE=/var/lib/local-gtm-deployer/approved-commit
+DEPLOY_STATE_FILE=/var/lib/local-gtm-deployer/state.json
 DEPLOY_METADATA_DIR=/var/lib/local-gtm-deployer/metadata
 LOCK_FILE=/var/lib/local-gtm-deployer/deploy.lock
+POLL_LOCK_FILE=/var/lib/local-gtm-deployer/poller.lock
 
-# --- Outbound SSH to the application CT (never use root) ---
+# --- Outbound SSH split-host release targets (never use root) ---
 DEPLOY_USER=local-gtm-deploy
-CRM_HOST=APP_SERVER
+APP_HOST=APP_SERVER
+DATABASE_HOST=DATABASE_SERVER
 SSH_IDENTITY_FILE=/etc/local-gtm/deploy/id_ed25519
 SSH_KNOWN_HOSTS_FILE=/etc/local-gtm/deploy/known_hosts
-REMOTE_COMPOSE_DIR=/opt/local-gtm/deploy/split
+
+# These are independent remote paths even when each CT uses the same layout.
+# The app target must contain compose.app.yml and the protected app.env; the
+# database target must contain compose.data.yml and the protected data.env.
+APP_COMPOSE_DIR=/opt/local-gtm/deploy/split
+APP_ENV_FILE=/opt/local-gtm/deploy/split/app.env
+DATA_COMPOSE_DIR=/opt/local-gtm/deploy/split
+DATA_ENV_FILE=/opt/local-gtm/deploy/split/data.env
 
 # --- Public health checks (HTTPS through Cloudflare Tunnel) ---
 PUBLIC_CRM_URL=https://crm.example.com
@@ -39,8 +51,24 @@ HEALTH_CHECK_SCRIPT=/opt/local-gtm/deploy/health-check.sh
 DEPLOYMENT_ENV=/etc/local-gtm/deployment.env
 HOSTS_ENV=/etc/local-gtm/hosts.env
 
+# --- Protected split-environment rendering contract ---
+# The legacy protected input file consumed by split/render-proxmox-envs.sh must
+# explicitly contain every required key, including OPENBAO_TOKEN. Values are
+# never inherited from the renderer environment and must not be placeholders.
+# Controller bootstrap must install this config, scripts, state/metadata/lock
+# directories, SSH material, known-host entries, and least-privilege remote
+# Docker access before enabling the poller. That private bootstrap is not part
+# of this public-safe contract.
+#
+# For the first release, set FIRST_RELEASE_BACKUP to a non-empty directory
+# containing an operational backup (images, compose, DB dump). The deployer
+# will refuse any mutation without it when no prior state exists.
+
+# First-release operational backup path (set before initial deployment only)
+FIRST_RELEASE_BACKUP=/var/backups/local-gtm/first-exact-release-20260721T224223Z
+
 # --- hosts.env placeholders (copy to /etc/local-gtm/hosts.env) ---
-# CRM_HOST=APP_SERVER
+# APP_HOST=APP_SERVER
 # DATABASE_HOST=DATABASE_SERVER
 # DOCUMENT_HOST=DOCUMENT_SERVER
 # IDENTITY_HOST=IDENTITY_SERVER
