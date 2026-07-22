@@ -16,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src tests prisma.config.ts vitest.config.ts",
     "test": "vitest run --config vitest.config.ts",
-    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration": "node -e \"if (!process.env.TEST_DATABASE_URL) { console.error('Missing required integration environment: TEST_DATABASE_URL'); process.exit(1) }\" && vitest run --config vitest.integration.config.ts --no-file-parallelism",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:validate": "prisma validate",
@@ -26,11 +26,11 @@
     "@local-gtm/contracts": "workspace:*",
     "@local-gtm/domain": "workspace:*",
     "@local-gtm/fixtures": "workspace:*",
-    "@prisma/client": "6.19.1",
+    "@prisma/client": "6.19.3",
     "zod": "3.25.76"
   },
   "devDependencies": {
-    "prisma": "6.19.1",
+    "prisma": "6.19.3",
     "tsx": "4.21.0"
   }
 }
