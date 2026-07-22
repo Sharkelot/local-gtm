@@ -1,0 +1,17 @@
+# Cloudflare Tunnel ingress configuration for Local GTM
+# Copy to cloudflared-config.yml and customize for your environment.
+# The setup-cloudflared-ct901.sh script generates this automatically.
+#
+# tunnel: <tunnel-name>
+# credentials-file: /etc/cloudflared/credentials.json
+# metrics: 127.0.0.1:20241
+#
+# ingress:
+#   # Wildcard routes all subdomains to Caddy (handles per-domain routing)
+#   - hostname: '*.example.com'
+#     service: https://<crm-ct-ip>:443
+#     originRequest:
+#       noTLSVerify: true
+#
+#   # Catch-all
+#   - service: http_status:404

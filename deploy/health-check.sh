@@ -3,6 +3,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC1091
+# shellcheck disable=SC1090
 source "${DEPLOYMENT_ENV:-/etc/local-gtm/deployment.env}"
 
 : "${PUBLIC_CRM_URL:?set PUBLIC_CRM_URL, e.g. https://crm.example.com}"

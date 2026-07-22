@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, ci/public-safe-pipeline]
 
 permissions:
   contents: read
@@ -54,10 +54,10 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: pnpm/action-setup@41ff726dd646dcc8963274a505a352d452795d2 # v4.2.0
+      - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
         with:
           version: 10.15.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f9d6a5a2a # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
@@ -68,11 +68,148 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
-      - run: pnpm test:integration
       - run: pnpm build
       - run: pnpm --filter @local-gtm/db db:seed
       - run: pnpm --filter @local-gtm/web exec playwright install --with-deps chromium
       - run: pnpm test:e2e
+
+  dependency-backed-integration:
+    name: Dependency-backed integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      POSTGRES_USER: integration_test
+      POSTGRES_PASSWORD: integration-test-postgres-password
+      POSTGRES_DB: local_gtm_integration
+      DATABASE_URL: postgresql://integration_test:integration-test-postgres-password@127.0.0.1:5432/local_gtm_integration
+      TEST_DATABASE_URL: postgresql://integration_test:integration-test-postgres-password@127.0.0.1:5432/local_gtm_integration
+      TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      MINIO_ROOT_USER: integration-test-minio
+      MINIO_ROOT_PASSWORD: integration-test-minio-password
+      TEST_MINIO_ENDPOINT: http://127.0.0.1:9000
+      TEST_MINIO_ACCESS_KEY: integration-test-minio
+      TEST_MINIO_SECRET_KEY: integration-test-minio-password
+      TEST_MINIO_SCANNER_ACCESS_KEY: integration-test-minio
+      TEST_MINIO_SCANNER_SECRET_KEY: integration-test-minio-password
+      TEST_MINIO_BUCKET: local-gtm-integration
+      TEST_CLAMAV_HOST: 127.0.0.1
+      TEST_CLAMAV_PORT: 3310
+    services:
+      postgres:
+        image: postgres@sha256:86e0b703649d7a792bd9243ee28afc9d8f7c6b2b5638077c9d6882d4d472bbfd
+        env:
+          POSTGRES_USER: integration_test
+          POSTGRES_PASSWORD: integration-test-postgres-password
+          POSTGRES_DB: local_gtm_integration
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U integration_test -d local_gtm_integration"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      clamav:
+        image: clamav/clamav@sha256:629a3050df6a706aedb31859fbb8139e9aaf8f56b0ffefbf251b8358a7c9e76c
+        ports:
+          - 3310:3310
+        options: >-
+          --health-cmd "clamdscan --ping 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 60
+          --health-start-period 30s
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Start pinned MinIO
+        run: >-
+          docker run --detach --rm
+          --name local-gtm-integration-minio
+          --publish 127.0.0.1:9000:9000
+          --env MINIO_ROOT_USER
+          --env MINIO_ROOT_PASSWORD
+          minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+          server /data >/dev/null
+      - name: Wait for dependency readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wait_until() {
+            local name="$1"
+            shift
+            for attempt in $(seq 1 120); do
+              if "$@" >/dev/null 2>&1; then
+                echo "${name}=ready"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "::error::${name} did not become ready"
+            return 1
+          }
+
+          clamav_ping() {
+            local response
+            if ! exec 3<>/dev/tcp/127.0.0.1/3310; then
+              return 1
+            fi
+            printf 'PING\n' >&3
+            if ! IFS= read -r -t 2 response <&3; then
+              exec 3<&- 3>&-
+              return 1
+            fi
+            exec 3<&- 3>&-
+            [[ "$response" == PONG* ]]
+          }
+
+          wait_until PostgreSQL docker exec "${{ job.services.postgres.id }}" pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+          wait_until Redis docker exec "${{ job.services.redis.id }}" redis-cli ping
+          wait_until MinIO curl --fail --silent --show-error "$TEST_MINIO_ENDPOINT/minio/health/ready"
+          wait_until ClamAV clamav_ping
+      - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @local-gtm/db db:generate
+      - run: pnpm --filter @local-gtm/db db:migrate
+      - name: Create versioned test bucket
+        run: |
+          pnpm --filter @local-gtm/platform-worker exec node --input-type=module <<'NODE'
+          import { Client } from 'minio';
+
+          const endpoint = new URL(process.env.TEST_MINIO_ENDPOINT);
+          const bucket = process.env.TEST_MINIO_BUCKET;
+          const client = new Client({
+            endPoint: endpoint.hostname,
+            port: Number(endpoint.port || 80),
+            useSSL: endpoint.protocol === 'https:',
+            accessKey: process.env.TEST_MINIO_ACCESS_KEY,
+            secretKey: process.env.TEST_MINIO_SECRET_KEY,
+          });
+
+          if (!(await client.bucketExists(bucket))) {
+            await client.makeBucket(bucket);
+          }
+          await client.setBucketVersioning(bucket, { Status: 'Enabled' });
+          const versioning = await client.getBucketVersioning(bucket);
+          if (versioning.Status !== 'Enabled') {
+            throw new Error(`Bucket versioning is ${versioning.Status ?? 'unset'}`);
+          }
+          console.log(`bucket=${bucket} versioning=enabled`);
+          NODE
+      - run: pnpm test:integration
 
   docker-build:
     name: Production image build
@@ -81,8 +218,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: docker/setup-buildx-action@b5ca514318fb6c203bef6baf8199c721f8922d8c # v3.10.0
-      - uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+      - uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
         with:
           context: .
           file: apps/web/Dockerfile
@@ -91,7 +228,7 @@ jobs:
           tags: local-gtm-web:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
+      - uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
         with:
           context: .
           file: apps/platform-worker/Dockerfile
@@ -100,7 +237,7 @@ jobs:
           tags: local-gtm-platform-worker:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: docker/build-push-action@14487c788077a082d674a64272168311680cb370 # v6.16.0
+      - uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
         with:
           context: .
           file: packages/db/Dockerfile.migrator
@@ -110,30 +247,64 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Smoke-test platform worker runtime dependencies
+        run: >-
+          docker run --rm --network none --entrypoint node
+          local-gtm-platform-worker:ci
+          -e "Promise.all([import('bullmq'),import('minio'),import('@local-gtm/db')]).then(([, , db])=>{if(!db.prisma)throw new Error('Prisma client export missing');console.log('platform-worker-runtime=ok')})"
+
+      - name: Smoke-test migrator runtime
+        run: >-
+          docker run --rm --network none --entrypoint sh
+          -e DATABASE_URL=postgresql://runtime:runtime@127.0.0.1:5432/runtime
+          local-gtm-migrator:ci
+          -lc "pnpm --filter @local-gtm/db exec prisma --version >/dev/null && pnpm --filter @local-gtm/db exec node -e \"import('@prisma/client').then(()=>console.log('migrator-runtime=ok'))\""
+
+  deployment-tests:
+    name: Deployment script safety
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install deployment test tools
+        run: sudo apt-get update && sudo apt-get install --yes bats shellcheck jq
+      - name: Validate shell syntax
+        run: bash -n deploy/deploy.sh deploy/poller.sh deploy/release-manifest.sh deploy/rollback.sh deploy/split/render-proxmox-envs.sh
+      - name: Run ShellCheck
+        run: shellcheck deploy/deploy.sh deploy/poller.sh deploy/release-manifest.sh deploy/rollback.sh deploy/split/render-proxmox-envs.sh
+      - name: Run deployment regression tests
+        run: bats deploy/release-manifest.bats
+
   dependency-audit:
     name: Dependency audit
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: pnpm/action-setup@41ff726dd646dcc8963274a505a352d452795d2 # v4.2.0
+      - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
         with:
           version: 10.15.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f9d6a5a2a # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --prod --audit-level=high
 
-  dependency-review:
-    name: Dependency review
-    if: github.event_name == 'pull_request'
+  secret-scan:
+    name: Secret scan
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/dependency-review-action@3b139cfc5fae8b618d3eae167148d24b2156f5c3 # v4.7.0
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   filesystem-scan:
     name: Filesystem vulnerability scan
@@ -141,19 +312,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+      - name: Run Trivy filesystem scan in container
+        uses: aquasecurity/trivy-action@7b7aa264d83dc58691451798b4d117d53d21edfe # v0.28.0
         with:
           scan-type: fs
+          scan-ref: '.'
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
-
-  secret-scan:
-    name: Secret scan
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
