@@ -298,7 +298,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/dependency-review-action@3b139cfc5fae8b618d3eae167148d24b2156f5c3 # v4.7.0
+      - uses: actions/dependency-review-action@38ecb5b593bf0eb19e335c03f97670f792489a8b # v4.7.0
 
   secret-scan:
     name: Secret scan
