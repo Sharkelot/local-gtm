@@ -24,7 +24,7 @@ RUN node -e 'const fs = require("fs"); for (const name of ["contracts", "domain"
   && node -e 'const fs = require("fs"); for (const name of ["contracts", "domain", "fixtures"]) { const path = `packages/${name}/package.json`; const pkg = JSON.parse(fs.readFileSync(path, "utf8")); pkg.exports["."].default = "./dist/index.js"; fs.writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`); fs.rmSync(`packages/${name}/tsconfig.build.json`); }' \
   && pnpm --filter @local-gtm/db db:generate \
   && pnpm --filter @local-gtm/db build \
-  && pnpm --filter @local-gtm/platform-worker build \
+  && pnpm --filter @local-gtm/platform-worker exec tsc -p tsconfig.build.json \
   && pnpm --filter @local-gtm/platform-worker deploy --prod --legacy /prod/platform-worker \
   && for target in /prod/platform-worker/node_modules/.pnpm/@prisma+client@*/node_modules; do \
     cp -a /app/node_modules/.pnpm/@prisma+client@*/node_modules/.prisma "$target/"; \
