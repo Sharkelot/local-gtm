@@ -25,7 +25,7 @@ RUN node -e 'const fs = require("fs"); for (const name of ["contracts", "domain"
   && pnpm --filter @local-gtm/db db:generate \
   && pnpm --filter @local-gtm/db build \
   && pnpm --filter @local-gtm/platform-worker build \
-  && pnpm --filter @local-gtm/platform-worker deploy --prod /prod/platform-worker \
+  && pnpm --filter @local-gtm/platform-worker deploy --prod --legacy /prod/platform-worker \
   && for target in /prod/platform-worker/node_modules/.pnpm/@prisma+client@*/node_modules; do \
     cp -a /app/node_modules/.pnpm/@prisma+client@*/node_modules/.prisma "$target/"; \
     cp -a /app/node_modules/.pnpm/@prisma+client@*/node_modules/@prisma/client/. "$target/@prisma/client/"; \

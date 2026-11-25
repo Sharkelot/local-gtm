@@ -27,9 +27,10 @@
     "@local-gtm/domain": "workspace:*",
     "@local-gtm/fixtures": "workspace:*",
     "@prisma/client": "6.19.3",
-    "zod": "3.25.76"
+    "zod": "4.6.6"
   },
   "devDependencies": {
+    "dotenv": "^18.0.10",
     "prisma": "6.19.3",
     "tsx": "4.21.0"
   }
