@@ -28,6 +28,8 @@ suite('PostgreSQL tenant and immutability controls', () => {
     await admin.$executeRawUnsafe(
       'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_runtime',
     );
+    const runtimeRole = await runtime.$queryRaw<{ role: string }[]>`SELECT current_user AS role`;
+    expect(runtimeRole[0]?.role).toBe('app_runtime');
     await admin.tenant.createMany({
       data: [
         { id: tenantA, name: 'Tenant A', slug: 'tenant-a' },
