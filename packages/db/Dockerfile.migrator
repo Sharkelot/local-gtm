@@ -1,10 +1,11 @@
-FROM node:24.18.0-bookworm-slim
+FROM node:26.13.1-bookworm-slim@sha256:0042e17d232a87a2cd485be1da7900fca4d10a4ad11b29e9285da1d2e54798c9
 
 ENV PNPM_HOME=/pnpm
 ENV COREPACK_HOME=/opt/corepack
 ENV PATH=$PNPM_HOME:$PATH
 WORKDIR /workspace
-RUN mkdir -p "$COREPACK_HOME" \
+RUN npm install --global corepack@0.36.0 \
+  && mkdir -p "$COREPACK_HOME" \
   && corepack enable \
   && corepack prepare pnpm@10.15.0 --activate \
   && chmod -R a+rX "$COREPACK_HOME" \

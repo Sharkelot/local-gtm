@@ -8,6 +8,15 @@ Run the installer from an elevated PowerShell 7 prompt. Obtain the two secret
 values from the protected Proxmox deployment environment; do not place them on
 the command line or in source control.
 
+Node.js 26 no longer bundles Corepack. Install the userland Corepack release and
+activate the repository-pinned package manager before running the installer:
+
+```powershell
+npm install --global corepack@0.36.0
+corepack enable
+corepack prepare pnpm@10.15.0 --activate
+```
+
 ```powershell
 $workerToken = Read-Host 'Inference worker token' -AsSecureString
 $redisPassword = Read-Host 'Redis password' -AsSecureString
@@ -18,7 +27,7 @@ $redisPassword = Read-Host 'Redis password' -AsSecureString
 
 The installer:
 
-- requires Node 24 and pnpm;
+- requires Node 26.13.1 and pnpm 10.15.0 (via Corepack);
 - builds and deploys a production-only worker bundle;
 - downloads WinSW 2.12.0 from its official GitHub release and verifies the
   pinned SHA-256 before use;

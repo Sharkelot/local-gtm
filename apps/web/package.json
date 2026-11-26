@@ -19,18 +19,18 @@
     "@local-gtm/domain": "workspace:*",
     "csv-parse": "6.1.0",
     "ioredis": "5.11.1",
-    "next": "16.2.10",
-    "next-auth": "4.24.14",
+    "next": "16.4.6",
+    "next-auth": "4.24.15",
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "zod": "3.25.76"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "@tailwindcss/postcss": "4.3.3",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "eslint-config-next": "16.2.10",
+    "eslint-config-next": "16.4.6",
     "tailwindcss": "4.3.3"
   }
 }

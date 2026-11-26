@@ -2,6 +2,8 @@
 .github
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
 LEDGER.md
 **/node_modules

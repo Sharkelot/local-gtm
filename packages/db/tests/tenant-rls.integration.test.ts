@@ -9,8 +9,10 @@ const suite = describe.skipIf(!integrationEnabled);
 
 suite('PostgreSQL tenant and immutability controls', () => {
   const admin = new PrismaClient({ datasourceUrl: adminUrl });
-  const runtimeUrl = adminUrl.replace('test:test@', 'app_runtime:runtime-test@');
-  const runtime = new PrismaClient({ datasourceUrl: runtimeUrl });
+  const runtimeDatabaseUrl = new URL(adminUrl);
+  runtimeDatabaseUrl.username = 'app_runtime';
+  runtimeDatabaseUrl.password = 'runtime-test';
+  const runtime = new PrismaClient({ datasourceUrl: runtimeDatabaseUrl.toString() });
   const tenantA = '10000000-0000-4000-8000-000000000001';
   const tenantB = '20000000-0000-4000-8000-000000000002';
   const tenantBConnection = '20000000-0000-4000-8000-000000000030';
@@ -26,6 +28,8 @@ suite('PostgreSQL tenant and immutability controls', () => {
     await admin.$executeRawUnsafe(
       'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_runtime',
     );
+    const runtimeRole = await runtime.$queryRaw<{ role: string }[]>`SELECT current_user AS role`;
+    expect(runtimeRole[0]?.role).toBe('app_runtime');
     await admin.tenant.createMany({
       data: [
         { id: tenantA, name: 'Tenant A', slug: 'tenant-a' },
