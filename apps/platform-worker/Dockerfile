@@ -12,6 +12,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/db/package.json packages/db/package.json
 COPY packages/fixtures/package.json packages/fixtures/package.json
+COPY patches patches
 RUN pnpm install --frozen-lockfile
 COPY apps/platform-worker apps/platform-worker
 COPY packages/contracts packages/contracts
