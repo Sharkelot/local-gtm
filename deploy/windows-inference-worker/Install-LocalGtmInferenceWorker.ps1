@@ -31,8 +31,8 @@ if ([Uri]$LmStudioBaseUrl -as [Uri] -eq $null -or ([Uri]$LmStudioBaseUrl).Host -
 }
 
 $node = (Get-Command node -ErrorAction Stop).Source
-$nodeVersion = (& $node --version).TrimStart('v').Split('.')[0]
-if ($nodeVersion -ne '24') { throw "Node 24 is required; found $(& $node --version)." }
+$nodeVersion = (& $node --version).Trim()
+if ($nodeVersion -ne 'v26.13.1') { throw "Node v26.13.1 is required; found $nodeVersion." }
 $pnpm = (Get-Command pnpm -ErrorAction Stop).Source
 
 function ConvertTo-PlainText([Security.SecureString] $value) {
