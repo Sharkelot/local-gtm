@@ -32,21 +32,44 @@ fetch_manifest_artifact() {
   local artifact_name="release-manifest-${commit}"
 
   # GitHub API: find the artifact
-  local api_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${artifact_name}&per_page=1"
+  local api_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${artifact_name}&per_page=100"
   local auth_header=""
-  [ -n "$GHCR_READ_TOKEN" ] && auth_header="Authorization: Bearer ${GHCR_READ_TOKEN}"
+  [ -n "$GHCR_READ_TOKEN" ] && auth_header="Authorization: Bearer ${GHCR...KEN}"
 
-  local download_url
-  download_url=$(curl -fsSL ${auth_header:+-H "$auth_header"} "$api_url" | python3 -c "
+  local artifacts_json candidates run_id run_url download_url=""
+  artifacts_json=$(curl -fsSL ${auth_header:+-H "$auth_header"} "$api_url") || return 1
+  candidates=$(printf '%s' "$artifacts_json" | python3 -c '
 import json, sys
-try:
-    data = json.load(sys.stdin)
-    artifacts = data.get('artifacts', [])
-    if artifacts:
-        print(artifacts[0]['archive_download_url'])
-except Exception:
-    sys.exit(1)
-" 2>/dev/null || true)
+commit, name = sys.argv[1:]
+for artifact in json.load(sys.stdin).get("artifacts", []):
+    run = artifact.get("workflow_run") or {}
+    if (artifact.get("name") == name and not artifact.get("expired")
+            and run.get("head_sha") == commit and run.get("id")
+            and artifact.get("archive_download_url")):
+        print("{}\t{}".format(run["id"], artifact["archive_download_url"]))
+' "$commit" "$artifact_name" 2>/dev/null) || return 1
+
+  while IFS=$'\t' read -r run_id candidate_url; do
+    [ -n "$run_id" ] || continue
+    run_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+    if curl -fsSL ${auth_header:+-H "$auth_header"} "$run_url" | python3 -c '
+import json, sys
+run = json.load(sys.stdin)
+expected_id, commit, repository = sys.argv[1:]
+sys.exit(0 if run.get("id") == int(expected_id)
+    and run.get("name") == "Publish images"
+    and run.get("path") == ".github/workflows/publish.yml"
+    and run.get("event") == "workflow_run"
+    and run.get("status") == "completed"
+    and run.get("conclusion") == "success"
+    and run.get("head_branch") == "main"
+    and run.get("head_sha") == commit
+    and (run.get("repository") or {}).get("full_name") == repository else 1)
+' "$run_id" "$commit" "$GITHUB_REPOSITORY" 2>/dev/null; then
+      download_url=$candidate_url
+      break
+    fi
+  done <<< "$candidates"
 
   if [ -z "$download_url" ]; then
     log "no manifest artifact found for commit ${commit}"
@@ -68,7 +91,8 @@ except Exception:
   fi
 
   # Copy to a stable location with atomic write (temp + mv)
-  local dest="${tmp_dir}/../release-manifest-${commit}.json"
+  local dest
+  dest="$(dirname "$tmp_dir")/release-manifest-${commit}.json"
   local tmp_dest
   tmp_dest=$(mktemp "${dest}.XXXXXX")
   cp "$manifest_file" "$tmp_dest"
@@ -108,6 +132,17 @@ fi
 # Validate
 if ! bash "${SCRIPT_DIR}/release-manifest.sh" validate "$manifest_path"; then
   log "invalid manifest for commit ${approved_commit}"
+  exit 67
+fi
+manifest_commit=$(bash "${SCRIPT_DIR}/release-manifest.sh" get-commit "$manifest_path") || exit 67
+if [ "$manifest_commit" != "$approved_commit" ]; then
+  log "manifest commit does not match approved commit ${approved_commit}"
+  exit 67
+fi
+
+if [ -n "${DEPLOY_STATE_FILE:-}" ] && [ -e "$DEPLOY_STATE_FILE" ] \
+  && ! jq -e 'type == "object" and .schemaVersion == 1' "$DEPLOY_STATE_FILE" >/dev/null 2>&1; then
+  log "deployment state is corrupt; refusing to trigger deployment"
   exit 67
 fi
 

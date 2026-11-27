@@ -17,10 +17,60 @@ for path in "$legacy_env" "$cloudflare_token_file"; do
   fi
 done
 
-set -a
-# shellcheck disable=SC1090
-source "$legacy_env"
-set +a
+parsed_env=$(mktemp)
+trap 'rm -f "$parsed_env"' EXIT
+if ! python3 - "$legacy_env" > "$parsed_env" <<'PY'
+import re
+import sys
+
+seen = set()
+for number, raw in enumerate(open(sys.argv[1], encoding="utf-8"), 1):
+    line = raw.rstrip("\r\n")
+    if not line or line.lstrip().startswith("#"):
+        continue
+    match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", line)
+    if not match:
+        raise SystemExit(f"invalid legacy env syntax on line {number}")
+    name, value = match.groups()
+    if name in seen:
+        raise SystemExit(f"duplicate legacy env key on line {number}: {name}")
+    seen.add(name)
+    if value.startswith("'") or value.startswith('"'):
+        quote = value[0]
+        if len(value) < 2 or value[-1] != quote:
+            raise SystemExit(f"malformed quoted value on line {number}")
+        body = value[1:-1]
+        decoded = []
+        index = 0
+        while index < len(body):
+            char = body[index]
+            if char == "\\":
+                index += 1
+                if index >= len(body) or body[index] not in ("\\", quote):
+                    raise SystemExit(f"invalid escape on line {number}")
+                char = body[index]
+            elif char == quote:
+                raise SystemExit(f"unescaped quote on line {number}")
+            decoded.append(char)
+            index += 1
+        value = "".join(decoded)
+    elif any(char in value for char in "'\"`;$"):
+        raise SystemExit(f"unsupported shell syntax on line {number}")
+    sys.stdout.write(name + "\0" + value + "\0")
+PY
+then
+  rm -f "$parsed_env"
+  echo "could not parse legacy env file safely" >&2
+  exit 65
+fi
+
+declare -A legacy_values=()
+while IFS= read -r -d '' name && IFS= read -r -d '' value; do
+  legacy_values["$name"]="$value"
+  printf -v "$name" '%s' "$value"
+done < "$parsed_env"
+rm -f "$parsed_env"
+trap - EXIT
 
 required=(
   APP_DOMAIN HOOKS_DOMAIN KEYCLOAK_DOMAIN GRAFANA_DOMAIN POSTGRES_DB
@@ -37,7 +87,7 @@ required=(
 )
 
 for name in "${required[@]}"; do
-  if [ -z "${!name:-}" ]; then
+  if [ -z "${legacy_values[$name]:-}" ]; then
     echo "missing required legacy value: $name" >&2
     exit 65
   fi
@@ -49,12 +99,23 @@ if [ "${#cloudflare_token}" -lt 32 ]; then
   exit 65
 fi
 
+openbao_placeholder="replace-after-openbao""-bootstrap"
+if [ -z "${legacy_values[OPENBAO_TOKEN]:-}" ] || [ "${legacy_values[OPENBAO_TOKEN]}" = "$openbao_placeholder" ]; then
+  echo "OPENBAO_TOKEN must be explicitly configured in the legacy env file" >&2
+  exit 65
+fi
+WEBHOOK_TRUSTED_MAPPINGS=${legacy_values[WEBHOOK_TRUSTED_MAPPINGS]:-[]}
+
 umask 077
 mkdir -p "$output_dir"
+staging_dir=$(mktemp -d "${output_dir}/.render.XXXXXX")
+backup_dir=$(mktemp -d "${output_dir}/.backup.XXXXXX")
+cleanup() { rm -rf "$staging_dir" "$backup_dir"; }
+trap cleanup EXIT
 minio_uploader_secret=$(openssl rand -hex 32)
 grafana_admin_password=$(openssl rand -hex 32)
 
-cat > "$output_dir/data.env" <<EOF
+cat > "$staging_dir/data.env" <<EOF
 POSTGRES_DB=$POSTGRES_DB
 POSTGRES_BOOTSTRAP_USER=$POSTGRES_BOOTSTRAP_USER
 POSTGRES_BOOTSTRAP_PASSWORD=$POSTGRES_BOOTSTRAP_PASSWORD
@@ -73,7 +134,7 @@ POSTGRES_PRIVATE_BIND_ADDRESS=$DATABASE_HOST
 MIGRATOR_IMAGE=local/legal-crm-migrator:26.13.1
 EOF
 
-cat > "$output_dir/documents.env" <<EOF
+cat > "$staging_dir/documents.env" <<EOF
 DOCUMENTS_PRIVATE_BIND_IP=$DOCUMENT_HOST
 MINIO_ROOT_USER=$MINIO_ROOT_USER
 MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
@@ -85,7 +146,7 @@ MINIO_SCANNER_ACCESS_KEY=$MINIO_SCANNER_ACCESS_KEY
 MINIO_SCANNER_SECRET_KEY=$MINIO_SCANNER_SECRET_KEY
 EOF
 
-cat > "$output_dir/identity.env" <<EOF
+cat > "$staging_dir/identity.env" <<EOF
 IDENTITY_PRIVATE_BIND_ADDRESS=$IDENTITY_HOST
 KEYCLOAK_IMAGE=quay.io/keycloak/keycloak@sha256:87758ff2293c78c942c7a1f0df2bc13e0f943fcf0c0d027c12fdfac54a35d93b
 OTEL_COLLECTOR_IMAGE=ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib@sha256:125bdbeb7590cc1952c5b3430ecf14063568980c2c93d5b38676cc0446ed8108
@@ -105,7 +166,7 @@ GRAFANA_ADMIN_USER=local-gtm-admin
 GRAFANA_ADMIN_PASSWORD=$grafana_admin_password
 EOF
 
-cat > "$output_dir/app.env" <<EOF
+cat > "$staging_dir/app.env" <<EOF
 APP_DOMAIN=$APP_DOMAIN
 HOOKS_DOMAIN=$HOOKS_DOMAIN
 PRIVATE_ADMIN_CIDR=$PRIVATE_ADMIN_CIDR
@@ -130,7 +191,7 @@ KEYCLOAK_CLIENT_ID=$KEYCLOAK_CLIENT_ID
 KEYCLOAK_CLIENT_SECRET=$KEYCLOAK_CLIENT_SECRET
 AUTH_SECRET=$NEXTAUTH_SECRET
 OPENBAO_ADDR=https://${DOCUMENT_HOST}:8200
-OPENBAO_TOKEN=replace-after-openbao-bootstrap
+OPENBAO_TOKEN=$OPENBAO_TOKEN
 OTEL_EXPORTER_OTLP_ENDPOINT=https://${IDENTITY_HOST}:4318
 INFERENCE_WORKER_TOKEN=$INFERENCE_WORKER_TOKEN
 INFERENCE_WORKER_ACTOR_ID=$INFERENCE_WORKER_ACTOR_ID
@@ -145,5 +206,53 @@ CLAMAV_HOST=$DOCUMENT_HOST
 CLAMAV_PORT=3310
 EOF
 
-chmod 0600 "$output_dir"/*.env
+python3 - "$staging_dir" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for path in root.glob("*.env"):
+    lines = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if not separator:
+            raise SystemExit(f"invalid generated dotenv line in {path.name}")
+        value = value.replace("\\", "\\\\").replace("'", "\\'")
+        lines.append(f"{key}='{value}'")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+
+chmod 0600 "$staging_dir"/*.env
+published=()
+rollback_publication() {
+  local name
+  for name in "${published[@]}"; do
+    rm -f "$output_dir/$name"
+    if [ -f "$backup_dir/$name" ]; then
+      mv "$backup_dir/$name" "$output_dir/$name"
+    fi
+  done
+}
+for name in data.env documents.env identity.env app.env; do
+  if [ -e "$output_dir/$name" ]; then
+    cp -p "$output_dir/$name" "$backup_dir/$name"
+  fi
+done
+if ! sync "$staging_dir" "$backup_dir"; then
+  echo "could not sync staged protected environments" >&2
+  exit 1
+fi
+for name in data.env documents.env identity.env app.env; do
+  if ! mv -f "$staging_dir/$name" "$output_dir/$name"; then
+    rollback_publication
+    echo "could not publish protected environments" >&2
+    exit 1
+  fi
+  published+=("$name")
+done
+if ! sync "$output_dir"; then
+  rollback_publication
+  echo "could not sync published protected environments" >&2
+  exit 1
+fi
 echo "rendered protected split environments in $output_dir"
